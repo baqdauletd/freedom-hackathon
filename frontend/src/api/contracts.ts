@@ -13,6 +13,9 @@ export type RouteResult = {
   selected_managers: string[]
   manager_id?: number | null
   assigned_manager: string | null
+  assignment_status?: string | null
+  unassigned_reason?: string | null
+  warnings?: string[]
   ticket_lat?: number | null
   ticket_lon?: number | null
   office_lat?: number | null
@@ -40,6 +43,25 @@ export type RoutingRunEnvelope = {
 
 export type ResultsListResponse = {
   items: RouteResult[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export type RunListItem = {
+  run_id: string
+  status: string
+  created_at: string | null
+  summary: RunSummary
+  source_files: {
+    tickets?: string | null
+    managers?: string | null
+    business_units?: string | null
+  }
+}
+
+export type RunsListResponse = {
+  items: RunListItem[]
   total: number
   limit: number
   offset: number
@@ -76,9 +98,12 @@ export type TicketDetailResponse = {
     office_lon: number | null
     manager_id?: number | null
     assigned_manager: string | null
+    assignment_status?: string | null
+    unassigned_reason?: string | null
     selected_managers: string[]
     rr_turn: number
     decision_trace?: Record<string, unknown> | null
+    warnings?: string[]
   } | null
 }
 
@@ -115,6 +140,10 @@ export type AnalyticsSummaryResponse = {
 
 export type AssistantQueryRequest = {
   query: string
+  run_id?: string
+  office?: string
+  date_from?: string
+  date_to?: string
 }
 
 export type AssistantFilters = {

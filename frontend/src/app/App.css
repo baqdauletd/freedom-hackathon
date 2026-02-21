@@ -138,6 +138,18 @@
   gap: 10px;
 }
 
+.scope-toolbar {
+  margin: 0 24px;
+  padding: 14px 16px;
+}
+
+.scope-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .search {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -803,6 +815,10 @@ tbody tr:hover {
 
   .topbar {
     padding: 18px 14px 0;
+  }
+
+  .scope-toolbar {
+    margin: 0 12px;
   }
 
   .ingest-hero h1 {

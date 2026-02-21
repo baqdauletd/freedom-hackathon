@@ -76,6 +76,7 @@ npm run dev
 ## Main Endpoints
 
 - `GET /health`
+- `GET /runs` (list recent processing runs for scope selector)
 - `POST /route` (reads CSV paths from env)
 - `POST /route/upload` (multipart CSV upload, returns `{run_id, summary, results}`; `?legacy=true` returns list)
 - `POST /route/upload/async` (enqueue CSV processing job, returns `{run_id, run_status, job}`)
@@ -89,6 +90,28 @@ npm run dev
 - `GET /managers` (manager load + assigned counts)
 - `GET /analytics/summary` (supports `run_id`, `office`, `date_from`, `date_to`)
 - `POST /assistant/query`
+
+## Database + Migrations
+
+- Alembic is configured to run from repository root and import the `backend` package correctly.
+- Migration command:
+
+```bash
+alembic -c backend/alembic.ini upgrade head
+```
+
+- Current schema revisions include queue support and assignment status/reason fields.
+
+## Backend Env Vars
+
+Primary vars (see `backend/.env.example` for full list):
+
+- `DATABASE_URL`
+- `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_TIMEOUT_SECONDS`
+- `FIRE_COMPLIANCE_MODE`, `ENABLE_GEOCODE`
+- `GEOCODE_TIMEOUT_SECONDS`, `GEOCODE_RATE_LIMIT_SECONDS`, `GEOCODE_FAIL_STREAK_LIMIT`
+- `PER_TICKET_BUDGET_MS`
+- `WORKER_POLL_INTERVAL_SECONDS`, `WORKER_MAX_ATTEMPTS`, `WORKER_RETRY_BASE_SECONDS`, `WORKER_RETRY_MAX_SECONDS`
 
 ## Docker (API + Worker + DB)
 
@@ -246,6 +269,12 @@ Frontend reads API base URL from:
 
 - `VITE_API_BASE_URL` (preferred)
 - `VITE_API_BASE` (supported fallback)
+
+UI scope behavior:
+
+- Scope selector (Run + optional date range) is shared across Results, Analytics, and Assistant.
+- “Assigned tickets” charts use scope-based assignment counts.
+- “Current load” is shown separately as manager state.
 
 ## Run Tests
 

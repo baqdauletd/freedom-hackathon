@@ -269,9 +269,10 @@ class AnalyticsService:
             "table": table,
         }
 
-    def assistant_query(self, db: Session, query: str) -> dict:
+    def assistant_query(self, db: Session, query: str, scope: dict[str, str | None] | None = None) -> dict:
         started = time.perf_counter()
         intent, filters = self._classify_and_extract_filters(db, query)
+        filters = self._apply_scope_overrides(db, filters, scope)
 
         function_map = {
             "average_age_by_office": self.get_average_age_by_office,
@@ -307,6 +308,39 @@ class AnalyticsService:
             "explanation": meta["explanation"],
             "filters": filters.model_dump(),
         }
+
+    def _apply_scope_overrides(
+        self,
+        db: Session,
+        filters: AssistantFilters,
+        scope: dict[str, str | None] | None,
+    ) -> AssistantFilters:
+        if not scope:
+            return filters
+
+        run_id = (scope.get("run_id") or "").strip() or None
+        office = (scope.get("office") or "").strip() or None
+        date_from = scope.get("date_from") if _parse_iso_date(scope.get("date_from")) else None
+        date_to = scope.get("date_to") if _parse_iso_date(scope.get("date_to")) else None
+
+        office_names = filters.office_names
+        if office:
+            known_offices = [row[0] for row in db.execute(select(BusinessUnit.office)).all() if row and row[0]]
+            normalized = next((value for value in known_offices if value.lower() == office.lower()), None)
+            if normalized:
+                office_names = [normalized]
+
+        return AssistantFilters(
+            office_names=office_names,
+            office_ids=filters.office_ids,
+            cities=filters.cities,
+            date_from=date_from or filters.date_from,
+            date_to=date_to or filters.date_to,
+            segment=filters.segment,
+            ticket_type=filters.ticket_type,
+            language=filters.language,
+            run_id=run_id or filters.run_id,
+        )
 
     def get_summary(
         self,

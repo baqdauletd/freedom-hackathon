@@ -17,6 +17,10 @@ class AIResult(BaseModel):
 class AssistantQueryRequest(BaseModel):
     query: str | None = None
     prompt: str | None = None
+    run_id: str | None = None
+    office: str | None = None
+    date_from: str | None = None
+    date_to: str | None = None
 
 
 AllowedIntent = Literal[

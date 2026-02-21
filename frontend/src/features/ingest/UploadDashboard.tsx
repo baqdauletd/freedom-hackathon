@@ -147,10 +147,7 @@ function UploadDashboard() {
       }
 
       setLatestRun(normalized)
-      const destination = normalized.run_id
-        ? `/results?run_id=${encodeURIComponent(normalized.run_id)}`
-        : "/results"
-      navigate(destination)
+      navigate("/results")
     } catch (error: unknown) {
       setValidationErrors(toValidationErrors(error))
     } finally {
@@ -176,11 +173,7 @@ function UploadDashboard() {
           <button
             className="ghost"
             type="button"
-            onClick={() =>
-              navigate(
-                latestRun?.run_id ? `/results?run_id=${encodeURIComponent(latestRun.run_id)}` : "/results",
-              )
-            }
+            onClick={() => navigate("/results")}
             disabled={!latestRun?.results.length}
           >
             Open last results
@@ -266,11 +259,7 @@ function UploadDashboard() {
           </p>
           <button
             className="ghost"
-            onClick={() =>
-              navigate(
-                latestRun?.run_id ? `/analytics?run_id=${encodeURIComponent(latestRun.run_id)}` : "/analytics",
-              )
-            }
+            onClick={() => navigate("/analytics")}
           >
             Open analytics
           </button>

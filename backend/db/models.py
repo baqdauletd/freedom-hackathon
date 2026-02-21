@@ -171,6 +171,8 @@ class Assignment(Base):
     selected_pair_snapshot: Mapped[list[str]] = mapped_column(JSON, default=list)
     rr_turn: Mapped[int] = mapped_column(Integer, default=0)
     decision_trace: Mapped[dict | None] = mapped_column(JSON)
+    assignment_status: Mapped[str] = mapped_column(String(32), default="assigned", index=True)
+    unassigned_reason: Mapped[str | None] = mapped_column(String(64), index=True)
 
     assigned_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

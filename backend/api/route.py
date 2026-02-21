@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, time as dtime
+import logging
 from typing import Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Header, Query, UploadFile
@@ -31,9 +32,11 @@ from backend.services.processing import process_tickets
 from backend.services.queue import enqueue_processing_job
 
 router = APIRouter(tags=["routing"])
+LOGGER = logging.getLogger("fire.ingestion")
 
 
 def _bad_request(error: CSVValidationError) -> HTTPException:
+    LOGGER.warning("csv_validation_failed", extra={"dataset": error.dataset, "error_message": error.message})
     return HTTPException(status_code=400, detail=error.message)
 
 
@@ -79,6 +82,12 @@ def _to_result_item(
     office: BusinessUnit | None,
     manager: Manager | None,
 ) -> dict:
+    trace_warnings: list[str] = []
+    if assignment and assignment.decision_trace and isinstance(assignment.decision_trace, dict):
+        raw = assignment.decision_trace.get("warnings")
+        if isinstance(raw, list):
+            trace_warnings = [str(item) for item in raw if str(item).strip()]
+
     return {
         "id": ticket.id,
         "run_id": ticket.run_id,
@@ -94,6 +103,9 @@ def _to_result_item(
         "selected_managers": assignment.selected_pair_snapshot if assignment else [],
         "manager_id": manager.id if manager else None,
         "assigned_manager": manager.full_name if manager else None,
+        "assignment_status": assignment.assignment_status if assignment else "unassigned",
+        "unassigned_reason": assignment.unassigned_reason if assignment else "no_assignment",
+        "warnings": trace_warnings,
         "ticket_lat": analysis.ticket_lat if analysis else None,
         "ticket_lon": analysis.ticket_lon if analysis else None,
         "office_lat": office.latitude if office else None,
@@ -308,6 +320,45 @@ def get_run_status(run_id: str, db: Session = Depends(get_db)) -> dict:
     }
 
 
+@router.get("/runs")
+def list_runs(
+    limit: int = Query(default=20, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    status: str | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    statement = select(ProcessingRun)
+    if status:
+        statement = statement.where(ProcessingRun.status == status)
+    statement = statement.order_by(desc(ProcessingRun.created_at), desc(ProcessingRun.id))
+
+    total_statement = select(func.count()).select_from(statement.subquery())
+    total = int(db.execute(total_statement).scalar_one() or 0)
+
+    rows = db.execute(statement.limit(limit).offset(offset)).scalars().all()
+    items = [
+        {
+            "run_id": row.id,
+            "status": row.status,
+            "created_at": _iso(row.created_at),
+            "summary": {
+                "total": int(row.tickets_total or 0),
+                "success": int(row.tickets_success or 0),
+                "failed": int(row.tickets_failed or 0),
+                "avg_processing_ms": int(row.avg_processing_ms or 0),
+                "elapsed_ms": int(row.elapsed_ms or 0),
+            },
+            "source_files": {
+                "tickets": row.tickets_filename,
+                "managers": row.managers_filename,
+                "business_units": row.business_units_filename,
+            },
+        }
+        for row in rows
+    ]
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
 @router.get("/jobs/{job_id}", response_model=JobStatusResponse)
 def get_job_status(job_id: str, db: Session = Depends(get_db)) -> dict:
     job = db.get(ProcessingJob, job_id)
@@ -453,9 +504,16 @@ def get_ticket_details(ticket_id: str, db: Session = Depends(get_db)) -> dict:
             "office_lon": office.longitude if office else None,
             "manager_id": manager.id if manager else None,
             "assigned_manager": manager.full_name if manager else None,
+            "assignment_status": assignment.assignment_status if assignment else "unassigned",
+            "unassigned_reason": assignment.unassigned_reason if assignment else "no_assignment",
             "selected_managers": assignment.selected_pair_snapshot if assignment else [],
             "rr_turn": assignment.rr_turn if assignment else 0,
             "decision_trace": assignment.decision_trace if assignment else None,
+            "warnings": (
+                assignment.decision_trace.get("warnings", [])
+                if assignment and isinstance(assignment.decision_trace, dict)
+                else []
+            ),
         }
         if assignment
         else None,

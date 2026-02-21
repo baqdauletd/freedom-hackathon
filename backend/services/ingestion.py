@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from dataclasses import dataclass
 
 
@@ -128,12 +129,30 @@ def _validate_headers(dataset: str, headers: list[str], required: set[str]) -> N
 
 
 def _validate_ticket_rows(rows: list[dict[str, str]]) -> None:
+    first_seen_row_by_ticket_id: dict[str, int] = {}
+    duplicates: list[tuple[str, int, int]] = []
+
     for idx, row in enumerate(rows, start=1):
-        if not row.get("ID"):
+        ticket_id = (row.get("ID") or "").strip()
+        if not ticket_id:
             raise CSVValidationError("tickets", f"Row {idx}: empty ID/GUID")
+
+        if ticket_id in first_seen_row_by_ticket_id:
+            duplicates.append((ticket_id, first_seen_row_by_ticket_id[ticket_id], idx))
+        else:
+            first_seen_row_by_ticket_id[ticket_id] = idx
+
         segment = row.get("Сегмент клиента", "")
         if segment not in ALLOWED_SEGMENTS:
             raise CSVValidationError("tickets", f"Row {idx}: invalid segment '{segment}'")
+
+    if duplicates:
+        preview = "; ".join(
+            f"{ticket_id} (rows {first_row} and {duplicate_row})"
+            for ticket_id, first_row, duplicate_row in duplicates[:5]
+        )
+        extra = " ..." if len(duplicates) > 5 else ""
+        raise CSVValidationError("tickets", f"Duplicate ticket IDs are not allowed: {preview}{extra}")
 
 
 def _validate_manager_rows(rows: list[dict[str, str]]) -> None:
@@ -183,5 +202,32 @@ def validate_business_units(parsed: ParsedCSV) -> list[dict[str, str]]:
 def split_skills(raw: str) -> list[str]:
     if not raw:
         return []
-    parts = [part.strip() for part in raw.replace(";", ",").split(",")]
-    return [part for part in parts if part]
+    raw_parts = re.split(r"[;,/|]", raw)
+    normalized: list[str] = []
+    seen: set[str] = set()
+
+    alias_map = {
+        "EN": "ENG",
+        "ENGLISH": "ENG",
+        "ENG": "ENG",
+        "KZ": "KZ",
+        "KAZ": "KZ",
+        "KAZAKH": "KZ",
+        "KAZAKHSTAN": "KZ",
+        "RU": "RU",
+        "RUS": "RU",
+        "RUSSIAN": "RU",
+        "VIP": "VIP",
+    }
+
+    for part in raw_parts:
+        token = re.sub(r"\s+", "", (part or "").strip()).upper()
+        if not token:
+            continue
+        canonical = alias_map.get(token, token)
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        normalized.append(canonical)
+
+    return normalized

@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react"
-import { useSearchParams } from "react-router-dom"
 import type { RouteResult, TicketDetailResponse } from "../api/contracts"
 import { getResults, getTicketDetail } from "../api/routing"
 import { useAppState } from "../state/AppStateContext"
@@ -60,17 +59,12 @@ const parseManagerFilter = (value: string): { managerId?: number; managerName?: 
 }
 
 function ResultsPage() {
-  const [params, setParams] = useSearchParams()
-  const runIdFromParams = params.get("run_id") || undefined
-  const officeFromParams = params.get("office") || ""
-  const dateFromParams = params.get("date_from") || ""
-  const dateToParams = params.get("date_to") || ""
   const { latestRun } = useAppState()
-  const runId = runIdFromParams || latestRun?.run_id || undefined
+  const runId = latestRun?.run_id || undefined
 
-  const [filters, setFilters] = useState<FilterState>({ ...initialFilters, office: officeFromParams })
-  const [dateFrom, setDateFrom] = useState(dateFromParams)
-  const [dateTo, setDateTo] = useState(dateToParams)
+  const [filters, setFilters] = useState<FilterState>(initialFilters)
+  const [dateFrom, setDateFrom] = useState("")
+  const [dateTo, setDateTo] = useState("")
   const [items, setItems] = useState<RouteResult[]>([])
   const [total, setTotal] = useState(0)
   const [offset, setOffset] = useState(0)
@@ -82,24 +76,7 @@ function ResultsPage() {
   const [detail, setDetail] = useState<TicketDetailResponse | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
 
-  const usesLocalData = !runId && Boolean(latestRun?.results.length)
-
-  useEffect(() => {
-    const next = new URLSearchParams(params)
-    const setOrDelete = (key: string, value?: string) => {
-      if (value) next.set(key, value)
-      else next.delete(key)
-    }
-
-    setOrDelete("run_id", runId)
-    setOrDelete("office", filters.office)
-    setOrDelete("date_from", dateFrom)
-    setOrDelete("date_to", dateTo)
-
-    if (next.toString() !== params.toString()) {
-      setParams(next, { replace: true })
-    }
-  }, [dateFrom, dateTo, filters.office, params, runId, setParams])
+  const usesLocalData = Boolean(latestRun?.results.length)
 
   const localFiltered = useMemo(() => {
     if (!usesLocalData || !latestRun) return []
@@ -146,6 +123,14 @@ function ResultsPage() {
     if (usesLocalData) {
       setTotal(localFiltered.length)
       setItems(localFiltered.slice(offset, offset + PAGE_SIZE))
+      return
+    }
+
+    if (!runId) {
+      setItems([])
+      setTotal(0)
+      setLoading(false)
+      setError("")
       return
     }
 
@@ -232,6 +217,26 @@ function ResultsPage() {
     }
   }, [items, localFiltered, usesLocalData])
 
+  const hasActiveFilters = Boolean(
+    filters.search ||
+      filters.segment ||
+      filters.type ||
+      filters.tone ||
+      filters.language ||
+      filters.city ||
+      filters.office ||
+      filters.managerId ||
+      dateFrom ||
+      dateTo,
+  )
+
+  const clearFilters = () => {
+    setFilters({ ...initialFilters })
+    setDateFrom("")
+    setDateTo("")
+    setOffset(0)
+  }
+
   const currentPage = Math.floor(offset / PAGE_SIZE) + 1
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
@@ -272,6 +277,9 @@ function ResultsPage() {
     Record<string, unknown>
   >
   const eligibleCount = eligibilityRows.filter((row) => row.eligible === true).length
+  const detailWarnings = asArray(detail?.assignment?.warnings).map((item) => String(item)).filter(Boolean)
+  const selectedWarnings = asArray(selected?.warnings).map((item) => String(item)).filter(Boolean)
+  const assignmentWarnings = detailWarnings.length ? detailWarnings : selectedWarnings
 
   return (
     <section className="results-page">
@@ -301,6 +309,12 @@ function ResultsPage() {
       </header>
 
       <section className="panel filters-panel">
+        <div className="panel-header">
+          <h3>Filters</h3>
+          <button className="ghost" type="button" onClick={clearFilters} disabled={!hasActiveFilters}>
+            Clear filters
+          </button>
+        </div>
         <div className="filter-grid">
           <label>
             Search
@@ -419,7 +433,8 @@ function ResultsPage() {
         </div>
         {loading ? <p className="muted">Loading results...</p> : null}
         {error ? <p className="error-text">{error}</p> : null}
-        {!loading && !items.length ? <p className="muted">No results match your filters.</p> : null}
+        {!loading && !runId ? <p className="muted">Upload files first to view results for the latest run.</p> : null}
+        {!loading && !!runId && !items.length ? <p className="muted">No results match your filters.</p> : null}
         <div className="table-wrap">
           <table>
             <thead>
@@ -443,11 +458,6 @@ function ResultsPage() {
                 <th>Language</th>
                 <th>Office</th>
                 <th>Manager</th>
-                <th>
-                  <button className="sort-btn" onClick={() => toggleSort("processing_ms")}>
-                    Processing
-                  </button>
-                </th>
               </tr>
             </thead>
             <tbody>
@@ -459,12 +469,11 @@ function ResultsPage() {
                   <td>{row.priority}</td>
                   <td>{row.language}</td>
                   <td>{row.office}</td>
-                  <td>{row.assigned_manager || "-"}</td>
                   <td>
-                    {typeof row.processing_ms === "number" ? `${row.processing_ms} ms` : "-"}
-                    {typeof row.processing_ms === "number" && row.processing_ms > 10_000 ? (
-                      <span className="warning-chip">Slow</span>
-                    ) : null}
+                    {row.assigned_manager ||
+                      (row.assignment_status === "unassigned"
+                        ? `Unassigned (${row.unassigned_reason || "no_eligible_manager"})`
+                        : "-")}
                   </td>
                 </tr>
               ))}
@@ -527,6 +536,25 @@ function ResultsPage() {
               <p className="muted">
                 Assigned manager: {detail?.assignment?.assigned_manager || selected.assigned_manager || "-"}
               </p>
+              <p className="muted">
+                Assignment status:{" "}
+                {detail?.assignment?.assignment_status || selected.assignment_status || "assigned"}
+              </p>
+              {detail?.assignment?.unassigned_reason || selected.unassigned_reason ? (
+                <p className="muted">
+                  Unassigned reason: {detail?.assignment?.unassigned_reason || selected.unassigned_reason}
+                </p>
+              ) : null}
+              {assignmentWarnings.length ? (
+                <div>
+                  <p className="muted">Warnings:</p>
+                  <ul className="mini-list">
+                    {assignmentWarnings.map((warning, index) => (
+                      <li key={`${warning}-${index}`}>{warning}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
               {trace ? (
                 <div className="explain-grid">
                   <div className="explain-card">

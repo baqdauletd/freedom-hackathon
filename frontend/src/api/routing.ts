@@ -121,3 +121,14 @@ export const getManagers = async (query?: {
     path: "/managers",
     query,
   })
+
+export const getRuns = async (query?: {
+  limit?: number
+  offset?: number
+  status?: string
+}) =>
+  apiClient.request({
+    method: "GET",
+    path: "/runs",
+    query,
+  })

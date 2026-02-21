@@ -17,4 +17,13 @@ def assistant_query(payload: AssistantQueryRequest, db: Session = Depends(get_db
     if not query:
         raise HTTPException(status_code=400, detail="Query is required")
     service = AnalyticsService(get_settings())
-    return service.assistant_query(db, query)
+    return service.assistant_query(
+        db,
+        query,
+        scope={
+            "run_id": payload.run_id,
+            "office": payload.office,
+            "date_from": payload.date_from,
+            "date_to": payload.date_to,
+        },
+    )

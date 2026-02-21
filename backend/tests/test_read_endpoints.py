@@ -187,6 +187,8 @@ def test_ticket_detail_exposes_decision_trace() -> None:
         payload = response.json()
         assert payload["ticket"]["external_id"] == "TK-1"
         assert payload["assignment"]["decision_trace"]["geo"]["strategy"] == "nearest_geo"
+        assert payload["assignment"]["assignment_status"] == "assigned"
+        assert isinstance(payload["assignment"]["warnings"], list)
     finally:
         app.dependency_overrides.clear()
         client.close()
@@ -236,6 +238,25 @@ def test_run_and_job_status_endpoints() -> None:
         job_payload = job_response.json()
         assert job_payload["job_id"] == job_id
         assert job_payload["run_id"] == run_id
+    finally:
+        app.dependency_overrides.clear()
+        client.close()
+        session.close()
+
+
+def test_runs_list_endpoint_returns_recent_runs() -> None:
+    client, session = _build_client()
+    try:
+        _, run_id = _seed(session)
+        response = client.get("/runs", params={"limit": 10, "offset": 0})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["total"] >= 1
+        assert len(payload["items"]) >= 1
+        first = payload["items"][0]
+        assert "run_id" in first
+        assert "summary" in first
+        assert any(item["run_id"] == run_id for item in payload["items"])
     finally:
         app.dependency_overrides.clear()
         client.close()

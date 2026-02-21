@@ -129,7 +129,7 @@ def filter_eligible_managers(
 
     result: list[dict] = []
     for manager in managers:
-        skills = manager["skills"]
+        skills = {str(skill).strip().upper() for skill in (manager.get("skills") or []) if str(skill).strip()}
         if need_vip and "VIP" not in skills:
             continue
 
@@ -142,7 +142,8 @@ def filter_eligible_managers(
         }:
             continue
 
-        if language in {"KZ", "ENG"} and language not in skills:
+        required_language = language.upper() if isinstance(language, str) else ""
+        if required_language in {"KZ", "ENG"} and required_language not in skills:
             continue
 
         result.append(manager)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -35,7 +36,10 @@ DEFAULT_TYPE = "Консультация"
 DEFAULT_TONE = "Нейтральный"
 DEFAULT_PRIORITY = 5
 DEFAULT_LANGUAGE = "RU"
-DEFAULT_RECOMMENDATION = "Проверьте обращение и свяжитесь с клиентом для уточнения деталей."
+SUMMARY_MAX_CHARS = 240
+RECOMMENDATION_MAX_CHARS = 240
+DEFAULT_RECOMMENDATION = "Рекомендуется уточнить детали и выполнить стандартную проверку по регламенту."
+DEFAULT_SUMMARY = "Клиентское обращение требует обработки менеджером."
 
 LOGGER = logging.getLogger("fire.ai")
 
@@ -51,8 +55,14 @@ class AIEnrichmentService:
 
     def analyze(self, ticket: dict[str, str]) -> AIResult:
         text = (ticket.get("Описание") or "").strip()
+        started = time.perf_counter()
         if not self.client:
-            return self._fallback(text)
+            result = self._fallback(text)
+            LOGGER.info(
+                "ai_analysis_completed",
+                extra={"provider": "fallback", "duration_ms": round((time.perf_counter() - started) * 1000, 2)},
+            )
+            return result
 
         prompt = (
             "Ты классификатор обращений. Верни JSON с ключами: "
@@ -74,10 +84,23 @@ class AIEnrichmentService:
             payload = response.choices[0].message.content or "{}"
             data = json.loads(payload)
             if not isinstance(data, dict):
-                return self._fallback(text)
-            return self._normalize(data, text)
+                result = self._fallback(text)
+                LOGGER.warning(
+                    "ai_analysis_invalid_payload",
+                    extra={"provider": "openai", "duration_ms": round((time.perf_counter() - started) * 1000, 2)},
+                )
+                return result
+            result = self._normalize(data, text)
+            LOGGER.info(
+                "ai_analysis_completed",
+                extra={"provider": "openai", "duration_ms": round((time.perf_counter() - started) * 1000, 2)},
+            )
+            return result
         except Exception as exc:  # pragma: no cover - depends on external API
-            LOGGER.warning("openai_analysis_failed", extra={"error": str(exc)})
+            LOGGER.warning(
+                "openai_analysis_failed",
+                extra={"error": str(exc), "duration_ms": round((time.perf_counter() - started) * 1000, 2)},
+            )
             return self._fallback(text)
 
     def _normalize(self, data: dict, source_text: str) -> AIResult:
@@ -98,7 +121,7 @@ class AIEnrichmentService:
         language = data.get("language") if data.get("language") in ALLOWED_LANGUAGES else DEFAULT_LANGUAGE
 
         summary = self._normalize_summary(str(data.get("summary", "")).strip(), source_text)
-        recommendation = str(data.get("recommendation", "")).strip() or DEFAULT_RECOMMENDATION
+        recommendation = self._normalize_recommendation(str(data.get("recommendation", "")).strip())
 
         return AIResult(
             ticket_type=ticket_type,
@@ -116,25 +139,42 @@ class AIEnrichmentService:
             priority=DEFAULT_PRIORITY,
             language=DEFAULT_LANGUAGE,
             summary=self._normalize_summary("", source_text),
-            recommendation=DEFAULT_RECOMMENDATION,
+            recommendation=self._normalize_recommendation(""),
         )
 
     def _normalize_summary(self, summary: str, source_text: str) -> str:
         value = summary.strip()
         if not value:
-            source = source_text.strip()
-            if source:
-                value = source[:180].strip()
-                if len(source) > 180:
-                    value += "..."
-            else:
-                value = "Клиентское обращение требует обработки менеджером."
+            value = self._build_summary_fallback(source_text)
 
         sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", value) if part.strip()]
         if not sentences:
-            return "Клиентское обращение требует обработки менеджером."
+            sentences = [self._build_summary_fallback(source_text)]
 
-        compact = " ".join(sentences[:2])
+        compact = " ".join(sentences[:2]).strip()
+        if not compact:
+            compact = self._build_summary_fallback(source_text)
+
+        compact = compact[:SUMMARY_MAX_CHARS].strip()
         if compact and compact[-1] not in ".!?":
             compact += "."
         return compact
+
+    def _build_summary_fallback(self, source_text: str) -> str:
+        source = re.sub(r"\s+", " ", source_text or "").strip()
+        if not source:
+            return DEFAULT_SUMMARY
+
+        snippet = source[:160].strip()
+        if len(source) > 160:
+            snippet += "..."
+        return f"Клиент обратился с запросом: {snippet}."
+
+    def _normalize_recommendation(self, recommendation: str) -> str:
+        value = re.sub(r"\s+", " ", recommendation or "").strip()
+        if not value:
+            value = DEFAULT_RECOMMENDATION
+        value = value[:RECOMMENDATION_MAX_CHARS].strip()
+        if value and value[-1] not in ".!?":
+            value += "."
+        return value

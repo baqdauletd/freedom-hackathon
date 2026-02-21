@@ -65,6 +65,7 @@ class GeocodingService:
         if elapsed < self.settings.geocode_rate_limit_seconds:
             time.sleep(self.settings.geocode_rate_limit_seconds - elapsed)
 
+        started = time.perf_counter()
         try:
             response = self.client.get(
                 "https://nominatim.openstreetmap.org/search",
@@ -76,10 +77,15 @@ class GeocodingService:
                 coords = (float(payload[0]["lat"]), float(payload[0]["lon"]))
                 self.cache[address] = coords
                 self.failure_streak = 0
+                LOGGER.info("geocode_resolved", extra={"duration_ms": round((time.perf_counter() - started) * 1000, 2)})
             else:
                 self.cache[address] = None
+                LOGGER.info("geocode_not_found", extra={"duration_ms": round((time.perf_counter() - started) * 1000, 2)})
         except Exception as exc:  # pragma: no cover - network behavior
-            LOGGER.warning("geocode_failed", extra={"error": str(exc)})
+            LOGGER.warning(
+                "geocode_failed",
+                extra={"error": str(exc), "duration_ms": round((time.perf_counter() - started) * 1000, 2)},
+            )
             self.cache[address] = None
             self.failure_streak += 1
 

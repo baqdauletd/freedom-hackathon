@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from typing import Any
 
 from sqlalchemy import select
@@ -11,6 +12,8 @@ from backend.schemas.ai import AIResult
 from backend.services.geocoding import GeocodingService
 from backend.services.ingestion import split_skills
 from backend.services.routing import OfficeDecision, pick_two_lowest_load
+
+LOGGER = logging.getLogger("fire.assignment")
 
 
 def upsert_business_units(db: Session, rows: list[dict[str, str]], geocoder: GeocodingService) -> list[BusinessUnit]:
@@ -159,7 +162,7 @@ def assign_ticket(
 
     need_vip = ticket_record.segment in {"VIP", "Priority"}
     requires_glav_spec = ai_result.ticket_type == "Смена данных"
-    required_language = ai_result.language if ai_result.language in {"KZ", "ENG"} else None
+    required_language = ai_result.language.upper() if ai_result.language.upper() in {"KZ", "ENG"} else None
 
     glav_positions = {
         "глав спец",
@@ -171,10 +174,15 @@ def assign_ticket(
     eligibility_details: list[dict[str, Any]] = []
     eligible: list[dict[str, Any]] = []
     for manager in managers_payload:
+        manager_skills = {
+            str(skill).strip().upper()
+            for skill in (manager.get("skills") or [])
+            if str(skill).strip()
+        }
         position_norm = manager["position"].replace(".", "").strip().lower()
-        vip_ok = (not need_vip) or ("VIP" in manager["skills"])
+        vip_ok = (not need_vip) or ("VIP" in manager_skills)
         position_ok = (not requires_glav_spec) or (position_norm in glav_positions)
-        language_ok = (required_language is None) or (required_language in manager["skills"])
+        language_ok = (required_language is None) or (required_language in manager_skills)
         is_eligible = vip_ok and position_ok and language_ok
 
         checks = {
@@ -186,7 +194,7 @@ def assign_ticket(
             "manager_id": manager["id"],
             "manager_name": manager["full_name"],
             "position": manager["position"],
-            "skills": manager["skills"],
+            "skills": sorted(manager_skills),
             "current_load": manager["current_load"],
             "checks": checks,
             "eligible": is_eligible,
@@ -202,6 +210,11 @@ def assign_ticket(
     selected_manager_name: str | None = None
     rr_turn = 0
     pair_hash: str | None = None
+    warnings: list[str] = []
+
+    if office_decision.used_fallback:
+        fallback_reason = office_decision.fallback_reason or "unknown"
+        warnings.append(f"geo_fallback:{fallback_reason}")
 
     if len(two) == 1:
         selected_manager_id = two[0]["id"]
@@ -232,6 +245,11 @@ def assign_ticket(
         if selected_manager:
             selected_manager.current_load += 1
 
+    assignment_status = "assigned" if selected_manager_id is not None else "unassigned"
+    unassigned_reason = None if selected_manager_id is not None else "no_eligible_manager"
+    if unassigned_reason:
+        warnings.append(f"assignment:{unassigned_reason}")
+
     decision_trace = {
         "geo": {
             "strategy": office_decision.strategy,
@@ -256,12 +274,23 @@ def assign_ticket(
             }
             for manager in two
         ],
+        "selected_pair": [
+            {
+                "manager_id": manager["id"],
+                "manager_name": manager["full_name"],
+                "current_load": manager["current_load"],
+            }
+            for manager in two
+        ],
         "round_robin": {
             "pair_hash": pair_hash,
             "turn_used": rr_turn,
             "assigned_manager_id": selected_manager_id,
             "assigned_manager_name": selected_manager_name,
         },
+        "assignment_status": assignment_status,
+        "unassigned_reason": unassigned_reason,
+        "warnings": warnings,
     }
 
     analysis = AIAnalysis(
@@ -285,10 +314,24 @@ def assign_ticket(
         selected_pair_snapshot=[manager["full_name"] for manager in two],
         rr_turn=rr_turn,
         decision_trace=decision_trace,
+        assignment_status=assignment_status,
+        unassigned_reason=unassigned_reason,
     )
     db.add(assignment)
 
     db.flush()
+
+    LOGGER.info(
+        "assignment_decision",
+        extra={
+            "ticket_id": ticket_record.external_id or ticket_record.id,
+            "office": office.office,
+            "manager_id": selected_manager_id,
+            "assignment_status": assignment_status,
+            "unassigned_reason": unassigned_reason,
+            "warnings_count": len(warnings),
+        },
+    )
 
     return {
         "id": ticket_record.id,
@@ -303,7 +346,11 @@ def assign_ticket(
         "recommendation": ai_result.recommendation,
         "office": office.office,
         "selected_managers": [manager["full_name"] for manager in two],
+        "manager_id": selected_manager_id,
         "assigned_manager": selected_manager_name,
+        "assignment_status": assignment_status,
+        "unassigned_reason": unassigned_reason,
+        "warnings": warnings,
         "ticket_lat": office_decision.ticket_coords[0] if office_decision.ticket_coords else None,
         "ticket_lon": office_decision.ticket_coords[1] if office_decision.ticket_coords else None,
         "office_lat": office.latitude,

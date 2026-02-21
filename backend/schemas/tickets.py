@@ -24,6 +24,9 @@ class ProcessedTicketResponse(BaseModel):
     selected_managers: list[str]
     manager_id: int | None = None
     assigned_manager: str | None
+    assignment_status: str | None = None
+    unassigned_reason: str | None = None
+    warnings: list[str] = []
     ticket_lat: float | None = None
     ticket_lon: float | None = None
     office_lat: float | None = None

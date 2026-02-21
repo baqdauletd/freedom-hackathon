@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { NavLink, Outlet, useLocation } from "react-router-dom"
 import { useAppState } from '../state/AppStateContext'
 
 const titles: Record<string, string> = {
@@ -18,18 +18,6 @@ function AppShell() {
   }).format(new Date())
 
   const canExport = Boolean(latestRun?.results.length)
-  const scopeParams = new URLSearchParams(location.search)
-  const sharedScope = new URLSearchParams()
-  const scopeKeys = ["run_id", "office", "office_id", "date_from", "date_to"]
-  for (const key of scopeKeys) {
-    const value = scopeParams.get(key)
-    if (value) sharedScope.set(key, value)
-  }
-  if (!sharedScope.get("run_id") && latestRun?.run_id) {
-    sharedScope.set("run_id", latestRun.run_id)
-  }
-  const sharedQuery = sharedScope.toString()
-  const withScope = (path: string) => (sharedQuery ? `${path}?${sharedQuery}` : path)
 
   const stringifyCsvValue = (value: unknown) => {
     if (Array.isArray(value)) return JSON.stringify(value.join(' | '))
@@ -77,13 +65,13 @@ function AppShell() {
             Upload
           </NavLink>
           <NavLink
-            to={withScope("/results")}
+            to="/results"
             className={({ isActive }) => `nav-item${isActive ? ' is-active' : ''}`}
           >
             Results
           </NavLink>
           <NavLink
-            to={withScope("/analytics")}
+            to="/analytics"
             className={({ isActive }) => `nav-item${isActive ? ' is-active' : ''}`}
           >
             Analytics
