@@ -85,6 +85,7 @@
   text-align: center;
   background: var(--surface-2);
   font-weight: 500;
+  cursor: pointer;
 }
 
 .dropzone span {
@@ -92,6 +93,15 @@
   font-size: 0.85rem;
   color: var(--ink-soft);
   margin-top: 4px;
+}
+
+.dropzone.is-dragging {
+  border-color: rgba(47, 108, 251, 0.5);
+  background: rgba(47, 108, 251, 0.08);
+}
+
+.file-input {
+  display: none;
 }
 
 .upload-example {
@@ -166,6 +176,24 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.error-text {
+  color: #d0342c;
+  font-size: 0.85rem;
+  font-weight: 500;
 }
 
 table {
