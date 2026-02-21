@@ -1,3 +1,5 @@
+import { API_BASE_URL } from "./config";
+
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 export type ApiErrorBody = {
@@ -32,13 +34,7 @@ const DEFAULT_TIMEOUT_MS = 20000;
 
 const resolveBaseUrl = (override?: string): string => {
   if (override) return override;
-
-  const viteEnv = typeof import.meta !== "undefined" ? import.meta.env : undefined;
-  const viteBase = viteEnv?.VITE_API_BASE_URL as string | undefined;
-  const craBase =
-    typeof process !== "undefined" ? (process.env.REACT_APP_API_BASE_URL as string | undefined) : undefined;
-
-  return viteBase ?? craBase ?? "";
+  return API_BASE_URL;
 };
 
 const buildUrl = (baseUrl: string, path: string): string => {

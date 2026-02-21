@@ -1,16 +1,19 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 
 const titles: Record<string, string> = {
-  '/': 'Operations dashboard',
-  '/tickets': 'Tickets overview',
-  '/managers': 'Managers roster',
-  '/business-units': 'Business units',
-  '/analytics': 'Analytics studio',
+  '/upload': 'Upload & Process',
+  '/results': 'Routing Results',
+  '/analytics': 'Analytics Studio',
 }
 
 function AppShell() {
   const location = useLocation()
-  const title = titles[location.pathname] ?? 'Operations dashboard'
+  const title = titles[location.pathname] ?? 'FIRE Dashboard'
+  const dayLabel = new Intl.DateTimeFormat('en-US', {
+    weekday: 'long',
+    month: 'short',
+    day: 'numeric',
+  }).format(new Date())
 
   return (
     <div className="app">
@@ -25,28 +28,16 @@ function AppShell() {
         <nav className="nav">
           <NavLink
             end
-            to="/"
+            to="/upload"
             className={({ isActive }) => `nav-item${isActive ? ' is-active' : ''}`}
           >
-            Dashboard
+            Upload
           </NavLink>
           <NavLink
-            to="/tickets"
+            to="/results"
             className={({ isActive }) => `nav-item${isActive ? ' is-active' : ''}`}
           >
-            Tickets
-          </NavLink>
-          <NavLink
-            to="/managers"
-            className={({ isActive }) => `nav-item${isActive ? ' is-active' : ''}`}
-          >
-            Managers
-          </NavLink>
-          <NavLink
-            to="/business-units"
-            className={({ isActive }) => `nav-item${isActive ? ' is-active' : ''}`}
-          >
-            Business units
+            Results
           </NavLink>
           <NavLink
             to="/analytics"
@@ -68,15 +59,15 @@ function AppShell() {
       <main className="main">
         <header className="topbar">
           <div>
-            <p className="eyebrow">Saturday, Feb 21</p>
+            <p className="eyebrow">{dayLabel}</p>
             <h1>{title}</h1>
           </div>
           <div className="topbar-actions">
             <div className="search">
               <span className="search-icon" />
-              <input placeholder="Search tickets, clients, managers" />
+              <input placeholder="Search tickets and managers" />
             </div>
-            <button className="primary">Create ticket</button>
+            <button className="primary">Export report</button>
             <div className="avatar">AI</div>
           </div>
         </header>

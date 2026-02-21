@@ -1,47 +1,79 @@
-import type { DragEvent } from 'react'
-import { useMemo, useRef, useState } from 'react'
+import type { DragEvent } from "react"
+import { useMemo, useRef, useState } from "react"
+import { useNavigate } from "react-router-dom"
+import { ApiError } from "../../api/client"
+import type { RouteResult, RoutingRunEnvelope, RunSummary } from "../../api/contracts"
+import { uploadAndRoute } from "../../api/routing"
+import { useAppState } from "../../state/AppStateContext"
 
 const uploadCards = [
   {
-    key: 'tickets',
-    title: 'Tickets CSV',
-    description: 'Client GUID, demographics, segment, description, attachments, address.',
-    example: 'tickets.csv',
+    key: "tickets",
+    title: "Tickets CSV",
+    description: "Client GUID, demographics, segment, description, attachments, address.",
+    example: "tickets.csv",
   },
   {
-    key: 'managers',
-    title: 'Managers CSV',
-    description: 'Manager name, role, skills, business unit, active workload.',
-    example: 'managers.csv',
+    key: "managers",
+    title: "Managers CSV",
+    description: "Manager name, role, skills, business unit, active workload.",
+    example: "managers.csv",
   },
   {
-    key: 'business_units',
-    title: 'Business Units CSV',
-    description: 'Office name and address to calculate proximity.',
-    example: 'business_units.csv',
+    key: "business_units",
+    title: "Business Units CSV",
+    description: "Office name and address to calculate proximity.",
+    example: "business_units.csv",
   },
-]
+] as const
 
-type RouteResult = {
-  ticket_id: string | number
-  ticket_index: number
-  ticket_type: string
-  sentiment: string
-  priority: number
-  language: string
-  summary: string
-  recommendation: string
-  office: string
-  selected_managers: string[]
-  assigned_manager: string | null
+type UploadKey = (typeof uploadCards)[number]["key"]
+
+type UploadFiles = Record<UploadKey, File | null>
+
+const summarizeResults = (results: RouteResult[], elapsedMs: number): RunSummary => {
+  const total = results.length
+  const success = results.filter((row) => Boolean(row.assigned_manager)).length
+  const failed = total - success
+  const timedRows = results.filter((row) => typeof row.processing_ms === "number")
+  const avgProcessingMs =
+    timedRows.length > 0
+      ? Math.round(
+          timedRows.reduce((sum, row) => sum + Number(row.processing_ms || 0), 0) / timedRows.length,
+        )
+      : 0
+
+  return {
+    total,
+    success,
+    failed,
+    avg_processing_ms: avgProcessingMs,
+    elapsed_ms: Math.round(elapsedMs),
+  }
 }
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
+const toValidationErrors = (error: unknown): string[] => {
+  if (!(error instanceof ApiError)) {
+    if (error instanceof Error) return [error.message]
+    return ["Unknown error"]
+  }
 
-type UploadKey = (typeof uploadCards)[number]['key']
+  const details = error.body?.details
+  if (details && typeof details === "object" && "detail" in (details as Record<string, unknown>)) {
+    const detail = (details as Record<string, unknown>).detail
+    if (typeof detail === "string") return [detail]
+    if (Array.isArray(detail)) return detail.filter((item): item is string => typeof item === "string")
+  }
+
+  if (typeof error.body?.message === "string") return [error.body.message]
+  return [error.message]
+}
 
 function UploadDashboard() {
-  const [files, setFiles] = useState<Record<UploadKey, File | null>>({
+  const navigate = useNavigate()
+  const { latestRun, setLatestRun } = useAppState()
+
+  const [files, setFiles] = useState<UploadFiles>({
     tickets: null,
     managers: null,
     business_units: null,
@@ -51,14 +83,13 @@ function UploadDashboard() {
     managers: false,
     business_units: false,
   })
-  const [results, setResults] = useState<RouteResult[]>([])
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
+  const [validationErrors, setValidationErrors] = useState<string[]>([])
   const inputRefs = useRef<Array<HTMLInputElement | null>>([])
 
   const canSubmit = useMemo(
-    () => !!files.tickets && !!files.managers && !!files.business_units && !loading,
-    [files, loading]
+    () => Boolean(files.tickets && files.managers && files.business_units && !loading),
+    [files, loading],
   )
 
   function handleFileSelect(key: UploadKey, file: File | null) {
@@ -89,55 +120,42 @@ function UploadDashboard() {
   }
 
   async function runRouting() {
-    setError('')
     if (!files.tickets || !files.managers || !files.business_units) {
-      setError('Please upload all three CSV files.')
+      setValidationErrors(["Please upload all three CSV files."])
       return
     }
 
-    const form = new FormData()
-    form.append('tickets', files.tickets)
-    form.append('managers', files.managers)
-    form.append('business_units', files.business_units)
-
+    setValidationErrors([])
     setLoading(true)
+    const started = performance.now()
+
     try {
-      const response = await fetch(`${API_BASE}/route/upload`, {
-        method: 'POST',
-        body: form,
+      const envelope = await uploadAndRoute({
+        tickets: files.tickets,
+        managers: files.managers,
+        business_units: files.business_units,
       })
-      if (!response.ok) {
-        const text = await response.text()
-        throw new Error(text || 'Request failed')
+
+      const fallbackSummary = summarizeResults(envelope.results, performance.now() - started)
+      const normalized: RoutingRunEnvelope = {
+        run_id: envelope.run_id,
+        results: envelope.results,
+        summary:
+          envelope.summary && envelope.summary.elapsed_ms > 0
+            ? envelope.summary
+            : { ...fallbackSummary, ...(envelope.summary || {}) },
       }
-      const data = (await response.json()) as RouteResult[]
-      setResults(data)
-    } catch (err: any) {
-      setError(err?.message || 'Unknown error')
+
+      setLatestRun(normalized)
+      const destination = normalized.run_id
+        ? `/results?run_id=${encodeURIComponent(normalized.run_id)}`
+        : "/results"
+      navigate(destination)
+    } catch (error: unknown) {
+      setValidationErrors(toValidationErrors(error))
     } finally {
       setLoading(false)
     }
-  }
-
-  function downloadCSV() {
-    if (!results.length) return
-    const headers = Object.keys(results[0])
-    const rows = results.map((row) =>
-      headers
-        .map((key) => {
-          const value = (row as any)[key]
-          return JSON.stringify(value ?? '')
-        })
-        .join(',')
-    )
-    const csv = [headers.join(','), ...rows].join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = 'routing_results.csv'
-    anchor.click()
-    URL.revokeObjectURL(url)
   }
 
   return (
@@ -145,30 +163,64 @@ function UploadDashboard() {
       <header className="ingest-hero">
         <div>
           <p className="eyebrow">After-hours routing</p>
-          <h1>Upload CSVs → Get routed results</h1>
+          <h1>Upload CSVs and distribute tickets intelligently</h1>
           <p className="hero-sub">
-            Drop the three datasets, run AI enrichment + rules engine, then review the final
-            assignments by manager.
+            Upload all three datasets. We validate the files, run AI enrichment, apply routing
+            rules, and prepare a review-ready dashboard.
           </p>
         </div>
         <div className="hero-actions">
           <button className="primary" onClick={runRouting} disabled={!canSubmit}>
-            {loading ? 'Running...' : 'Run routing'}
+            {loading ? "Processing..." : "Process files"}
           </button>
-          <button className="ghost">View sample format</button>
+          <button
+            className="ghost"
+            type="button"
+            onClick={() => navigate("/results")}
+            disabled={!latestRun?.results.length}
+          >
+            Open last results
+          </button>
         </div>
       </header>
 
+      {loading ? (
+        <section className="status-card upload-progress">
+          <div className="panel-header">
+            <h3>Processing in progress</h3>
+            <span className="muted">AI + routing pipeline</span>
+          </div>
+          <div className="progress-track">
+            <span className="progress-indeterminate" />
+          </div>
+          <p className="muted">
+            We are validating CSVs and processing tickets. You will be redirected to the results
+            page automatically.
+          </p>
+        </section>
+      ) : null}
+
+      {validationErrors.length ? (
+        <section className="status-card error-card" role="alert">
+          <p className="status-title">Please fix these issues</p>
+          <ul className="error-list">
+            {validationErrors.map((message) => (
+              <li key={message}>{message}</li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       <section className="upload-grid">
         {uploadCards.map((card, index) => (
-          <div className="upload-card" key={card.title}>
+          <div className="upload-card" key={card.key}>
             <div>
               <p className="upload-title">{card.title}</p>
               <p className="muted">{card.description}</p>
             </div>
             <input
-              ref={(el) => {
-                inputRefs.current[index] = el
+              ref={(element) => {
+                inputRefs.current[index] = element
               }}
               className="file-input"
               type="file"
@@ -176,7 +228,7 @@ function UploadDashboard() {
               onChange={(event) => handleFileSelect(card.key, event.target.files?.[0] ?? null)}
             />
             <button
-              className={`dropzone${dragging[card.key] ? ' is-dragging' : ''}`}
+              className={`dropzone${dragging[card.key] ? " is-dragging" : ""}`}
               type="button"
               onClick={() => handleBrowse(index)}
               onDragOver={handleDragOver}
@@ -191,7 +243,7 @@ function UploadDashboard() {
                 </>
               ) : (
                 <>
-                  <p>Drag & drop CSV</p>
+                  <p>Drag and drop CSV</p>
                   <span>or click to browse</span>
                 </>
               )}
@@ -203,87 +255,40 @@ function UploadDashboard() {
 
       <section className="status">
         <div className="status-card">
-          <p className="status-title">Pipeline status</p>
+          <p className="status-title">What gets processed</p>
           <div className="status-row">
             <span className="status-dot" />
             <div>
               <p className="status-label">AI enrichment</p>
-              <p className="muted">Classification, tone, language, summary, geocoding</p>
+              <p className="muted">Type, tone, language, priority, summary, recommendation</p>
             </div>
-            <span className="status-time">~6s per ticket</span>
           </div>
           <div className="status-row">
             <span className="status-dot amber" />
             <div>
-              <p className="status-label">Business rules</p>
-              <p className="muted">Office proximity, skills filters, round-robin balancing</p>
+              <p className="status-label">Routing logic</p>
+              <p className="muted">Geo office decision, hard skills filter, round-robin balancing</p>
             </div>
-            <span className="status-time">~2s per ticket</span>
           </div>
           <div className="status-row">
             <span className="status-dot green" />
             <div>
-              <p className="status-label">Assignments ready</p>
-              <p className="muted">Preview managers and routed tickets</p>
+              <p className="status-label">Dashboard outputs</p>
+              <p className="muted">Table filters, analytics charts, and explainability drawer</p>
             </div>
-            <span className="status-time">Realtime</span>
           </div>
         </div>
 
         <div className="status-card highlight">
-          <p className="highlight-title">AI command center</p>
+          <p className="highlight-title">Ready for review</p>
           <p className="highlight-text">
-            Ask: “Show distribution of complaint types by city” — we generate a chart instantly.
+            After processing you can drill into each ticket, see routing evidence, and open the AI
+            command center for ad-hoc analytics.
           </p>
-          <button className="ghost">Launch assistant</button>
+          <button className="ghost" onClick={() => navigate("/analytics")}>
+            Open analytics
+          </button>
         </div>
-      </section>
-
-      <section className="result">
-        <div className="panel-header">
-          <h3>Routed results</h3>
-          <div className="panel-actions">
-            {error ? <span className="error-text">{error}</span> : null}
-            <button className="ghost" onClick={downloadCSV} disabled={!results.length}>
-              Export results
-            </button>
-          </div>
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th>Ticket ID</th>
-              <th>Type</th>
-              <th>Sentiment</th>
-              <th>Priority</th>
-              <th>Language</th>
-              <th>Office</th>
-              <th>Assigned manager</th>
-            </tr>
-          </thead>
-          <tbody>
-            {results.map((row) => (
-              <tr key={row.ticket_index}>
-                <td>
-                  <div className="ticket-id">{row.ticket_id}</div>
-                </td>
-                <td>{row.ticket_type}</td>
-                <td>{row.sentiment}</td>
-                <td>{row.priority}</td>
-                <td>{row.language}</td>
-                <td>{row.office}</td>
-                <td>{row.assigned_manager || '-'}</td>
-              </tr>
-            ))}
-            {!results.length ? (
-              <tr>
-                <td className="muted" colSpan={7}>
-                  Upload files and run routing to see results.
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
       </section>
     </div>
   )
