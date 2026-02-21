@@ -54,3 +54,33 @@ class BatchResponse(BaseModel):
     run_id: str | None = None
     summary: RunSummaryResponse | None = None
     results: list[ProcessedTicketResponse]
+
+
+class JobStatusResponse(BaseModel):
+    job_id: str
+    run_id: str
+    status: str
+    idempotency_key: str | None = None
+    attempt_count: int
+    max_attempts: int
+    next_attempt_at: str | None = None
+    locked_at: str | None = None
+    locked_by: str | None = None
+    last_error: str | None = None
+    created_at: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    idempotency_reused: bool = False
+
+
+class QueuedRunResponse(BaseModel):
+    run_id: str
+    run_status: str
+    job: JobStatusResponse
+
+
+class RunStatusResponse(BaseModel):
+    run_id: str
+    status: str
+    summary: RunSummaryResponse
+    job: JobStatusResponse | None = None

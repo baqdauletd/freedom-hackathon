@@ -107,14 +107,26 @@ export type AssistantQueryRequest = {
   query: string
 }
 
+export type AssistantFilters = {
+  office_names: string[]
+  cities: string[]
+  date_from?: string | null
+  date_to?: string | null
+  segment?: "Mass" | "VIP" | "Priority" | null
+  ticket_type?: string | null
+  language?: "KZ" | "ENG" | "RU" | null
+  run_id?: string | null
+}
+
 export type AssistantQueryResponse = {
-  answer: string
   intent: string
-  chart_type: "bar" | "line" | "pie"
-  suggested_title: string
-  data: Record<string, unknown>
+  title: string
+  chart_type: "bar" | "line" | "pie" | "table"
+  data: {
+    labels: string[]
+    values: number[]
+  }
   table: Array<Record<string, unknown>>
-  chart?: string
-  chartConfig?: Record<string, unknown>
-  sql?: string | null
+  explanation: string
+  filters: AssistantFilters
 }

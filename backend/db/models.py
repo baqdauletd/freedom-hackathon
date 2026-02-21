@@ -36,9 +36,43 @@ class ProcessingRun(Base):
     managers_filename: Mapped[str | None] = mapped_column(String(255))
     business_units_filename: Mapped[str | None] = mapped_column(String(255))
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+    )
 
     tickets: Mapped[list["Ticket"]] = relationship(back_populates="run")
+    job: Mapped["ProcessingJob | None"] = relationship(back_populates="run", uselist=False)
+
+
+class ProcessingJob(Base):
+    __tablename__ = "processing_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    run_id: Mapped[str] = mapped_column(ForeignKey("processing_runs.id", ondelete="CASCADE"), unique=True, index=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    locked_by: Mapped[str | None] = mapped_column(String(128))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+        index=True,
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    run: Mapped[ProcessingRun] = relationship(back_populates="job")
 
 
 class Ticket(Base):
@@ -60,7 +94,12 @@ class Ticket(Base):
     house: Mapped[str | None] = mapped_column(String(64))
     normalized_address: Mapped[str | None] = mapped_column(String(512))
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+    )
 
     run: Mapped["ProcessingRun | None"] = relationship(back_populates="tickets")
     ai_analysis: Mapped["AIAnalysis | None"] = relationship(back_populates="ticket", uselist=False)
@@ -111,7 +150,12 @@ class AIAnalysis(Base):
     ticket_lon: Mapped[float | None] = mapped_column(Float)
     processing_ms: Mapped[int | None] = mapped_column(Integer)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+    )
 
     ticket: Mapped[Ticket] = relationship(back_populates="ai_analysis")
 
@@ -128,7 +172,12 @@ class Assignment(Base):
     rr_turn: Mapped[int] = mapped_column(Integer, default=0)
     decision_trace: Mapped[dict | None] = mapped_column(JSON)
 
-    assigned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    assigned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+    )
 
     ticket: Mapped[Ticket] = relationship(back_populates="assignment")
     office: Mapped[BusinessUnit] = relationship(back_populates="assignments")

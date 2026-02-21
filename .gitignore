@@ -58,6 +58,11 @@ pnpm-debug.log*
 .env.*
 backend/.env
 frontend/.env
+.envrc
+.direnv/
+*.local.env
+secrets.*
+*.secrets
 !.env.example
 !backend/.env.example
 !frontend/.env.example

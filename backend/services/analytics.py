@@ -1,9 +1,20 @@
 from __future__ import annotations
 
 import json
+import logging
+import re
+import time
+from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, time as dtime
 from typing import TYPE_CHECKING, Any
+
+from sqlalchemy import desc, func, select
+from sqlalchemy.orm import Session
+
+from backend.core.config import Settings
+from backend.db.models import AIAnalysis, Assignment, BusinessUnit, Manager, Ticket
+from backend.schemas.ai import AssistantFilters
 
 try:
     from openai import OpenAI as OpenAIClient
@@ -14,32 +25,68 @@ if TYPE_CHECKING:
     from openai import OpenAI as OpenAIType
 else:  # pragma: no cover - typing fallback for missing package
     OpenAIType = Any
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
 
-from backend.core.config import Settings
-from backend.db.models import AIAnalysis, Assignment, BusinessUnit, Manager, Ticket
+LOGGER = logging.getLogger("fire.assistant")
 
+ALLOWED_INTENTS = {
+    "average_age_by_office",
+    "ticket_count_by_city",
+    "ticket_type_distribution",
+    "sentiment_distribution",
+    "avg_priority_by_office",
+    "workload_by_manager",
+    "custom_filtered_summary",
+}
 
-def _parse_date(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value)
-    except ValueError:
-        return None
+ALLOWED_SEGMENTS = {"Mass", "VIP", "Priority"}
+ALLOWED_LANGUAGES = {"KZ", "ENG", "RU"}
+ALLOWED_TYPES = {
+    "Жалоба",
+    "Смена данных",
+    "Консультация",
+    "Претензия",
+    "Неработоспособность приложения",
+    "Мошеннические действия",
+    "Спам",
+}
 
-
-def _title_for_intent(intent: str) -> str:
-    mapping = {
-        "ticket_types_by_city": "Ticket types by city",
-        "tickets_by_office": "Ticket distribution by office",
-        "sentiment_distribution": "Sentiment distribution",
-        "avg_priority_by_office": "Average priority by office",
-        "avg_priority_by_city": "Average priority by city",
-        "workload_by_manager": "Manager workload",
-    }
-    return mapping.get(intent, "Analytics result")
+INTENT_META = {
+    "average_age_by_office": {
+        "title": "Средний возраст клиентов по офисам",
+        "chart": "bar",
+        "explanation": "Средний возраст рассчитан по клиентам, чьи обращения были распределены в выбранные офисы.",
+    },
+    "ticket_count_by_city": {
+        "title": "Количество обращений по городам",
+        "chart": "bar",
+        "explanation": "Показано количество распределенных обращений в разрезе городов клиентов.",
+    },
+    "ticket_type_distribution": {
+        "title": "Распределение типов обращений",
+        "chart": "pie",
+        "explanation": "Диаграмма показывает долю каждого типа обращений в выборке.",
+    },
+    "sentiment_distribution": {
+        "title": "Распределение тональности",
+        "chart": "pie",
+        "explanation": "Распределение тональности обращений (позитивный, нейтральный, негативный).",
+    },
+    "avg_priority_by_office": {
+        "title": "Средний приоритет по офисам",
+        "chart": "bar",
+        "explanation": "Средний приоритет обращений рассчитан по каждому офису назначения.",
+    },
+    "workload_by_manager": {
+        "title": "Нагрузка по менеджерам",
+        "chart": "bar",
+        "explanation": "Показана текущая нагрузка и количество назначений по менеджерам.",
+    },
+    "custom_filtered_summary": {
+        "title": "Сводка по выбранным фильтрам",
+        "chart": "table",
+        "explanation": "Сводные метрики рассчитаны по отфильтрованной выборке обращений.",
+    },
+}
 
 
 @dataclass
@@ -51,6 +98,212 @@ class AnalyticsService:
         if self.settings.openai_api_key and OpenAIClient is not None:
             self.client = OpenAIClient(api_key=self.settings.openai_api_key, timeout=self.settings.openai_timeout_seconds)
 
+    def get_average_age_by_office(self, db: Session, filters: AssistantFilters) -> dict:
+        statement = (
+            select(BusinessUnit.office, Ticket.birth_date)
+            .join(Assignment, Assignment.office_id == BusinessUnit.id)
+            .join(Ticket, Ticket.id == Assignment.ticket_id)
+            .join(AIAnalysis, AIAnalysis.ticket_id == Ticket.id)
+        )
+        statement = self._apply_filters(statement, filters)
+
+        office_ages: dict[str, list[int]] = defaultdict(list)
+        for office, birth_date in db.execute(statement).all():
+            age = _age_from_birth_date(birth_date)
+            if age is not None:
+                office_ages[office].append(age)
+
+        table = []
+        for office in _ordered_labels(office_ages.keys(), filters.office_names):
+            ages = office_ages[office]
+            avg_age = round(sum(ages) / len(ages), 2)
+            table.append({"office": office, "avg_age": avg_age, "count": len(ages)})
+
+        return {
+            "labels": [row["office"] for row in table],
+            "values": [row["avg_age"] for row in table],
+            "table": table,
+        }
+
+    def get_ticket_distribution_by_city(self, db: Session, filters: AssistantFilters) -> dict:
+        statement = (
+            select(Ticket.city, func.count(Ticket.id))
+            .join(AIAnalysis, AIAnalysis.ticket_id == Ticket.id)
+            .join(Assignment, Assignment.ticket_id == Ticket.id)
+            .join(BusinessUnit, BusinessUnit.id == Assignment.office_id)
+        )
+        statement = self._apply_filters(statement, filters)
+        rows = db.execute(statement.group_by(Ticket.city).order_by(Ticket.city)).all()
+
+        table = [{"city": city or "Unknown", "count": int(count)} for city, count in rows]
+        return {
+            "labels": [row["city"] for row in table],
+            "values": [row["count"] for row in table],
+            "table": table,
+        }
+
+    def get_ticket_type_distribution(self, db: Session, filters: AssistantFilters) -> dict:
+        statement = (
+            select(AIAnalysis.ticket_type, func.count(AIAnalysis.id))
+            .join(Ticket, Ticket.id == AIAnalysis.ticket_id)
+            .join(Assignment, Assignment.ticket_id == Ticket.id)
+            .join(BusinessUnit, BusinessUnit.id == Assignment.office_id)
+        )
+        statement = self._apply_filters(statement, filters)
+        rows = db.execute(statement.group_by(AIAnalysis.ticket_type).order_by(AIAnalysis.ticket_type)).all()
+
+        table = [{"ticket_type": ticket_type, "count": int(count)} for ticket_type, count in rows]
+        return {
+            "labels": [row["ticket_type"] for row in table],
+            "values": [row["count"] for row in table],
+            "table": table,
+        }
+
+    def get_sentiment_distribution(self, db: Session, filters: AssistantFilters) -> dict:
+        statement = (
+            select(AIAnalysis.tone, func.count(AIAnalysis.id))
+            .join(Ticket, Ticket.id == AIAnalysis.ticket_id)
+            .join(Assignment, Assignment.ticket_id == Ticket.id)
+            .join(BusinessUnit, BusinessUnit.id == Assignment.office_id)
+        )
+        statement = self._apply_filters(statement, filters)
+        rows = db.execute(statement.group_by(AIAnalysis.tone).order_by(AIAnalysis.tone)).all()
+
+        table = [{"tone": tone, "count": int(count)} for tone, count in rows]
+        return {
+            "labels": [row["tone"] for row in table],
+            "values": [row["count"] for row in table],
+            "table": table,
+        }
+
+    def get_avg_priority_by_office(self, db: Session, filters: AssistantFilters) -> dict:
+        statement = (
+            select(BusinessUnit.office, func.avg(AIAnalysis.priority))
+            .join(Assignment, Assignment.office_id == BusinessUnit.id)
+            .join(Ticket, Ticket.id == Assignment.ticket_id)
+            .join(AIAnalysis, AIAnalysis.ticket_id == Ticket.id)
+        )
+        statement = self._apply_filters(statement, filters)
+        rows = db.execute(statement.group_by(BusinessUnit.office).order_by(BusinessUnit.office)).all()
+
+        table = [
+            {"office": office, "avg_priority": round(float(avg_priority or 0), 2)}
+            for office, avg_priority in rows
+        ]
+        return {
+            "labels": [row["office"] for row in table],
+            "values": [row["avg_priority"] for row in table],
+            "table": table,
+        }
+
+    def get_manager_workload(self, db: Session, filters: AssistantFilters) -> dict:
+        count_statement = (
+            select(Assignment.manager_id.label("manager_id"), func.count(Assignment.id).label("assigned_count"))
+            .join(Ticket, Ticket.id == Assignment.ticket_id)
+            .join(AIAnalysis, AIAnalysis.ticket_id == Ticket.id)
+            .join(BusinessUnit, BusinessUnit.id == Assignment.office_id)
+        )
+        count_statement = self._apply_filters(count_statement, filters)
+        count_subquery = count_statement.group_by(Assignment.manager_id).subquery()
+
+        statement = (
+            select(
+                Manager.full_name,
+                BusinessUnit.office,
+                Manager.current_load,
+                func.coalesce(count_subquery.c.assigned_count, 0),
+            )
+            .join(BusinessUnit, BusinessUnit.id == Manager.office_id)
+            .outerjoin(count_subquery, count_subquery.c.manager_id == Manager.id)
+            .order_by(desc(Manager.current_load), Manager.full_name)
+        )
+
+        if filters.office_names:
+            statement = statement.where(BusinessUnit.office.in_(filters.office_names))
+
+        rows = db.execute(statement).all()
+        table = [
+            {
+                "manager": full_name,
+                "office": office,
+                "current_load": int(current_load or 0),
+                "assigned_count": int(assigned_count or 0),
+            }
+            for full_name, office, current_load, assigned_count in rows
+        ]
+
+        return {
+            "labels": [row["manager"] for row in table],
+            "values": [row["assigned_count"] for row in table],
+            "table": table,
+        }
+
+    def get_custom_filtered_summary(self, db: Session, filters: AssistantFilters) -> dict:
+        statement = (
+            select(
+                func.count(Ticket.id),
+                func.avg(AIAnalysis.priority),
+                func.count(func.distinct(BusinessUnit.office)),
+                func.count(func.distinct(Ticket.city)),
+            )
+            .join(AIAnalysis, AIAnalysis.ticket_id == Ticket.id)
+            .join(Assignment, Assignment.ticket_id == Ticket.id)
+            .join(BusinessUnit, BusinessUnit.id == Assignment.office_id)
+        )
+        statement = self._apply_filters(statement, filters)
+        total, avg_priority, office_count, city_count = db.execute(statement).one()
+
+        table = [
+            {"metric": "tickets_total", "value": int(total or 0)},
+            {"metric": "avg_priority", "value": round(float(avg_priority or 0), 2)},
+            {"metric": "offices", "value": int(office_count or 0)},
+            {"metric": "cities", "value": int(city_count or 0)},
+        ]
+        return {
+            "labels": [row["metric"] for row in table],
+            "values": [row["value"] for row in table],
+            "table": table,
+        }
+
+    def assistant_query(self, db: Session, query: str) -> dict:
+        started = time.perf_counter()
+        intent, filters = self._classify_and_extract_filters(db, query)
+
+        function_map = {
+            "average_age_by_office": self.get_average_age_by_office,
+            "ticket_count_by_city": self.get_ticket_distribution_by_city,
+            "ticket_type_distribution": self.get_ticket_type_distribution,
+            "sentiment_distribution": self.get_sentiment_distribution,
+            "avg_priority_by_office": self.get_avg_priority_by_office,
+            "workload_by_manager": self.get_manager_workload,
+            "custom_filtered_summary": self.get_custom_filtered_summary,
+        }
+
+        payload = function_map[intent](db, filters)
+        duration_ms = round((time.perf_counter() - started) * 1000, 2)
+
+        LOGGER.info(
+            "assistant_query_processed",
+            extra={
+                "query": query,
+                "intent": intent,
+                "filters": filters.model_dump(),
+                "duration_ms": duration_ms,
+                "result_rows": len(payload["table"]),
+            },
+        )
+
+        meta = INTENT_META[intent]
+        return {
+            "intent": intent,
+            "title": meta["title"],
+            "chart_type": meta["chart"],
+            "data": {"labels": payload["labels"], "values": payload["values"]},
+            "table": payload["table"],
+            "explanation": meta["explanation"],
+            "filters": filters.model_dump(),
+        }
+
     def get_summary(
         self,
         db: Session,
@@ -60,213 +313,272 @@ class AnalyticsService:
         date_from: str | None = None,
         date_to: str | None = None,
     ) -> dict:
-        parsed_from = _parse_date(date_from)
-        parsed_to = _parse_date(date_to)
+        filters = AssistantFilters(
+            run_id=run_id,
+            office_names=[office] if office else [],
+            date_from=date_from,
+            date_to=date_to,
+        )
 
-        ticket_types_stmt = (
+        statement = (
             select(Ticket.city, AIAnalysis.ticket_type, func.count(Ticket.id))
             .join(AIAnalysis, AIAnalysis.ticket_id == Ticket.id)
             .join(Assignment, Assignment.ticket_id == Ticket.id)
             .join(BusinessUnit, BusinessUnit.id == Assignment.office_id)
         )
-        tickets_by_office_stmt = (
+        statement = self._apply_filters(statement, filters)
+        ticket_types_by_city = db.execute(
+            statement.group_by(Ticket.city, AIAnalysis.ticket_type).order_by(Ticket.city, AIAnalysis.ticket_type)
+        ).all()
+
+        tickets_by_office_statement = (
             select(BusinessUnit.office, func.count(Assignment.id))
             .join(Assignment, Assignment.office_id == BusinessUnit.id)
             .join(Ticket, Ticket.id == Assignment.ticket_id)
+            .join(AIAnalysis, AIAnalysis.ticket_id == Ticket.id)
         )
-        sentiment_stmt = (
-            select(AIAnalysis.tone, func.count(AIAnalysis.id))
-            .join(Ticket, Ticket.id == AIAnalysis.ticket_id)
-            .join(Assignment, Assignment.ticket_id == Ticket.id)
-            .join(BusinessUnit, BusinessUnit.id == Assignment.office_id)
-        )
-        avg_priority_by_office_stmt = (
-            select(BusinessUnit.office, func.avg(AIAnalysis.priority))
-            .join(Assignment, Assignment.office_id == BusinessUnit.id)
-            .join(AIAnalysis, AIAnalysis.ticket_id == Assignment.ticket_id)
-            .join(Ticket, Ticket.id == Assignment.ticket_id)
-        )
-        avg_priority_by_city_stmt = (
+        tickets_by_office_statement = self._apply_filters(tickets_by_office_statement, filters)
+        tickets_by_office = db.execute(
+            tickets_by_office_statement.group_by(BusinessUnit.office).order_by(BusinessUnit.office)
+        ).all()
+
+        sentiment = self.get_sentiment_distribution(db, filters)
+        avg_priority = self.get_avg_priority_by_office(db, filters)
+        workload = self.get_manager_workload(db, filters)
+
+        avg_priority_by_city_statement = (
             select(Ticket.city, func.avg(AIAnalysis.priority))
             .join(AIAnalysis, AIAnalysis.ticket_id == Ticket.id)
             .join(Assignment, Assignment.ticket_id == Ticket.id)
             .join(BusinessUnit, BusinessUnit.id == Assignment.office_id)
         )
-        workload_stmt = (
-            select(
-                Manager.full_name,
-                BusinessUnit.office,
-                Manager.current_load,
-                func.count(Assignment.id),
-            )
-            .join(BusinessUnit, BusinessUnit.id == Manager.office_id)
-            .outerjoin(Assignment, Assignment.manager_id == Manager.id)
-            .outerjoin(Ticket, Ticket.id == Assignment.ticket_id)
-        )
-
-        if run_id:
-            ticket_types_stmt = ticket_types_stmt.where(Ticket.run_id == run_id)
-            tickets_by_office_stmt = tickets_by_office_stmt.where(Ticket.run_id == run_id)
-            sentiment_stmt = sentiment_stmt.where(Ticket.run_id == run_id)
-            avg_priority_by_office_stmt = avg_priority_by_office_stmt.where(Ticket.run_id == run_id)
-            avg_priority_by_city_stmt = avg_priority_by_city_stmt.where(Ticket.run_id == run_id)
-            workload_stmt = workload_stmt.where((Ticket.run_id == run_id) | (Ticket.id.is_(None)))
-
-        if office:
-            ticket_types_stmt = ticket_types_stmt.where(BusinessUnit.office == office)
-            tickets_by_office_stmt = tickets_by_office_stmt.where(BusinessUnit.office == office)
-            sentiment_stmt = sentiment_stmt.where(BusinessUnit.office == office)
-            avg_priority_by_office_stmt = avg_priority_by_office_stmt.where(BusinessUnit.office == office)
-            avg_priority_by_city_stmt = avg_priority_by_city_stmt.where(BusinessUnit.office == office)
-            workload_stmt = workload_stmt.where(BusinessUnit.office == office)
-
-        if parsed_from:
-            tickets_by_office_stmt = tickets_by_office_stmt.where(Assignment.assigned_at >= parsed_from)
-            avg_priority_by_office_stmt = avg_priority_by_office_stmt.where(Assignment.assigned_at >= parsed_from)
-            avg_priority_by_city_stmt = avg_priority_by_city_stmt.where(Assignment.assigned_at >= parsed_from)
-            workload_stmt = workload_stmt.where((Assignment.assigned_at >= parsed_from) | (Assignment.id.is_(None)))
-            ticket_types_stmt = ticket_types_stmt.where(Assignment.assigned_at >= parsed_from)
-            sentiment_stmt = sentiment_stmt.where(Assignment.assigned_at >= parsed_from)
-
-        if parsed_to:
-            tickets_by_office_stmt = tickets_by_office_stmt.where(Assignment.assigned_at <= parsed_to)
-            avg_priority_by_office_stmt = avg_priority_by_office_stmt.where(Assignment.assigned_at <= parsed_to)
-            avg_priority_by_city_stmt = avg_priority_by_city_stmt.where(Assignment.assigned_at <= parsed_to)
-            workload_stmt = workload_stmt.where((Assignment.assigned_at <= parsed_to) | (Assignment.id.is_(None)))
-            ticket_types_stmt = ticket_types_stmt.where(Assignment.assigned_at <= parsed_to)
-            sentiment_stmt = sentiment_stmt.where(Assignment.assigned_at <= parsed_to)
-
-        ticket_types_by_city = (
-            db.execute(ticket_types_stmt.group_by(Ticket.city, AIAnalysis.ticket_type).order_by(Ticket.city, AIAnalysis.ticket_type)).all()
-        )
-        tickets_by_office = (
-            db.execute(tickets_by_office_stmt.group_by(BusinessUnit.office).order_by(BusinessUnit.office)).all()
-        )
-        sentiment_distribution = (
-            db.execute(sentiment_stmt.group_by(AIAnalysis.tone).order_by(AIAnalysis.tone)).all()
-        )
-        avg_priority_by_office = (
-            db.execute(
-                avg_priority_by_office_stmt.group_by(BusinessUnit.office).order_by(BusinessUnit.office)
-            ).all()
-        )
-        avg_priority_by_city = (
-            db.execute(avg_priority_by_city_stmt.group_by(Ticket.city).order_by(Ticket.city)).all()
-        )
-        workload_by_manager = (
-            db.execute(
-                workload_stmt.group_by(Manager.full_name, BusinessUnit.office, Manager.current_load).order_by(Manager.full_name)
-            ).all()
-        )
+        avg_priority_by_city_statement = self._apply_filters(avg_priority_by_city_statement, filters)
+        avg_priority_by_city = db.execute(
+            avg_priority_by_city_statement.group_by(Ticket.city).order_by(Ticket.city)
+        ).all()
 
         return {
             "ticket_types_by_city": [
-                {"city": city or "Unknown", "ticket_type": ticket_type, "count": count}
+                {"city": city or "Unknown", "ticket_type": ticket_type, "count": int(count)}
                 for city, ticket_type, count in ticket_types_by_city
             ],
-            "tickets_by_office": [{"office": office_name, "count": count} for office_name, count in tickets_by_office],
-            "sentiment_distribution": [{"tone": tone, "count": count} for tone, count in sentiment_distribution],
-            "avg_priority_by_office": [
-                {"office": office_name, "avg_priority": round(float(avg_priority or 0), 2)}
-                for office_name, avg_priority in avg_priority_by_office
-            ],
+            "tickets_by_office": [{"office": office_name, "count": int(count)} for office_name, count in tickets_by_office],
+            "sentiment_distribution": sentiment["table"],
+            "avg_priority_by_office": avg_priority["table"],
             "avg_priority_by_city": [
-                {"city": city or "Unknown", "avg_priority": round(float(avg_priority or 0), 2)}
-                for city, avg_priority in avg_priority_by_city
+                {"city": city or "Unknown", "avg_priority": round(float(avg_value or 0), 2)}
+                for city, avg_value in avg_priority_by_city
             ],
-            "workload_by_manager": [
-                {
-                    "manager": manager_name,
-                    "office": office_name,
-                    "current_load": int(current_load or 0),
-                    "assigned_count": int(assigned_count or 0),
-                }
-                for manager_name, office_name, current_load, assigned_count in workload_by_manager
-            ],
+            "workload_by_manager": workload["table"],
         }
 
-    def assistant_query(self, db: Session, query: str) -> dict:
-        intent, chart = self._resolve_intent(query)
-        summary = self.get_summary(db)
+    def _apply_filters(self, statement, filters: AssistantFilters):
+        parsed_from, parsed_to = _parse_date_range(filters.date_from, filters.date_to)
 
-        intent_to_data = {
-            "ticket_types_by_city": summary["ticket_types_by_city"],
-            "tickets_by_office": summary["tickets_by_office"],
-            "sentiment_distribution": summary["sentiment_distribution"],
-            "avg_priority_by_office": summary["avg_priority_by_office"],
-            "avg_priority_by_city": summary["avg_priority_by_city"],
-            "workload_by_manager": summary["workload_by_manager"],
-        }
+        if filters.run_id:
+            statement = statement.where(Ticket.run_id == filters.run_id)
+        if filters.office_names:
+            statement = statement.where(BusinessUnit.office.in_(filters.office_names))
+        if filters.cities:
+            statement = statement.where(Ticket.city.in_(filters.cities))
+        if filters.segment:
+            statement = statement.where(Ticket.segment == filters.segment)
+        if filters.ticket_type:
+            statement = statement.where(AIAnalysis.ticket_type == filters.ticket_type)
+        if filters.language:
+            statement = statement.where(AIAnalysis.language == filters.language)
+        if parsed_from:
+            statement = statement.where(Assignment.assigned_at >= parsed_from)
+        if parsed_to:
+            statement = statement.where(Assignment.assigned_at <= parsed_to)
 
-        table = intent_to_data[intent]
-        data = {"series": table}
-        answer = f"Built report '{_title_for_intent(intent)}' based on your query."
+        return statement
 
-        sql_map = {
-            "ticket_types_by_city": "SELECT city, ticket_type, COUNT(*) FROM tickets JOIN ai_analysis ... GROUP BY city, ticket_type",
-            "tickets_by_office": "SELECT office, COUNT(*) FROM assignments JOIN business_units ... GROUP BY office",
-            "sentiment_distribution": "SELECT tone, COUNT(*) FROM ai_analysis GROUP BY tone",
-            "avg_priority_by_office": "SELECT office, AVG(priority) FROM ... GROUP BY office",
-            "avg_priority_by_city": "SELECT city, AVG(priority) FROM ... GROUP BY city",
-            "workload_by_manager": "SELECT manager, current_load, COUNT(*) FROM managers LEFT JOIN assignments ... GROUP BY manager",
-        }
-
-        return {
-            "answer": answer,
-            "intent": intent,
-            "chart_type": chart,
-            "suggested_title": _title_for_intent(intent),
-            "data": data,
-            "table": table,
-            "chart": chart,
-            "sql": sql_map[intent],
-            "chartConfig": {"type": chart, "x": list(data["series"][0].keys())[0] if data["series"] else "label"},
-        }
-
-    def _resolve_intent(self, query: str) -> tuple[str, str]:
-        allowed_intents = {
-            "ticket_types_by_city": "bar",
-            "tickets_by_office": "bar",
-            "sentiment_distribution": "pie",
-            "avg_priority_by_office": "bar",
-            "avg_priority_by_city": "line",
-            "workload_by_manager": "bar",
-        }
+    def _classify_and_extract_filters(self, db: Session, query: str) -> tuple[str, AssistantFilters]:
+        known_offices = [row[0] for row in db.execute(select(BusinessUnit.office).order_by(BusinessUnit.office)).all() if row[0]]
+        known_cities = [row[0] for row in db.execute(select(Ticket.city).where(Ticket.city.is_not(None)).distinct()).all() if row[0]]
 
         if self.client:
-            prompt = (
-                "Determine analytics intent. Return JSON with keys intent and chart. "
-                f"intent must be one of: {list(allowed_intents.keys())}. "
-                "chart must be one of: bar, pie, line. "
-                f"User query: {query!r}"
+            parsed = self._classify_with_llm(query, known_offices, known_cities)
+            if parsed is not None:
+                return parsed
+
+        return self._classify_with_heuristics(query, known_offices, known_cities)
+
+    def _classify_with_llm(
+        self,
+        query: str,
+        known_offices: list[str],
+        known_cities: list[str],
+    ) -> tuple[str, AssistantFilters] | None:
+        if not self.client:
+            return None
+
+        prompt = (
+            "Classify analytics request to one allowed intent and extract filters as strict JSON. "
+            f"Allowed intents: {sorted(ALLOWED_INTENTS)}. "
+            "Allowed filters keys: office_names (array), cities (array), date_from (YYYY-MM-DD), date_to (YYYY-MM-DD), "
+            "segment (Mass/VIP/Priority), ticket_type, language (KZ/ENG/RU), run_id. "
+            "Do not add unknown keys. "
+            f"Known offices: {known_offices}. Known cities: {known_cities[:100]}. "
+            f"User query: {query!r}. "
+            "Return JSON object: {intent: string, filters: object}."
+        )
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.settings.openai_model,
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                temperature=0,
             )
-            try:
-                response = self.client.chat.completions.create(
-                    model=self.settings.openai_model,
-                    messages=[{"role": "user", "content": prompt}],
-                    response_format={"type": "json_object"},
-                    temperature=0,
-                )
-                payload = json.loads(response.choices[0].message.content or "{}")
-                intent = payload.get("intent")
-                chart = payload.get("chart")
-                if intent in allowed_intents:
-                    return intent, chart if chart in {"bar", "pie", "line"} else allowed_intents[intent]
-            except Exception:
-                pass
+            payload = json.loads(response.choices[0].message.content or "{}")
+            intent = payload.get("intent")
+            if intent not in ALLOWED_INTENTS:
+                return None
+            filters = _sanitize_filters(payload.get("filters") or {}, known_offices, known_cities)
+            return intent, filters
+        except Exception:
+            return None
 
+    def _classify_with_heuristics(
+        self,
+        query: str,
+        known_offices: list[str],
+        known_cities: list[str],
+    ) -> tuple[str, AssistantFilters]:
         q = query.lower()
-        if "manager" in q or "нагруз" in q:
-            return "workload_by_manager", "bar"
-        if "город" in q or "city" in q:
-            if "тип" in q or "type" in q:
-                return "ticket_types_by_city", "bar"
-            return "avg_priority_by_city", "line"
-        if "офис" in q:
-            if "сред" in q or "avg" in q:
-                return "avg_priority_by_office", "bar"
-            return "tickets_by_office", "bar"
-        if "тон" in q or "sentiment" in q:
-            return "sentiment_distribution", "pie"
 
-        return "ticket_types_by_city", "bar"
+        intent = "custom_filtered_summary"
+        if "возраст" in q or "age" in q:
+            intent = "average_age_by_office"
+        elif "тип" in q and "обращ" in q:
+            intent = "ticket_type_distribution"
+        elif "тон" in q or "sentiment" in q or "эмо" in q:
+            intent = "sentiment_distribution"
+        elif "приоритет" in q:
+            intent = "avg_priority_by_office"
+        elif "нагруз" in q or "manager" in q:
+            intent = "workload_by_manager"
+        elif "город" in q or "city" in q or "количеств" in q or "count" in q:
+            intent = "ticket_count_by_city"
+
+        filters_dict: dict[str, Any] = {
+            "office_names": [office for office in known_offices if office.lower() in q],
+            "cities": [city for city in known_cities if city.lower() in q],
+        }
+
+        for segment in ALLOWED_SEGMENTS:
+            if segment.lower() in q:
+                filters_dict["segment"] = segment
+                break
+
+        for language in ALLOWED_LANGUAGES:
+            if language.lower() in q:
+                filters_dict["language"] = language
+                break
+
+        for ticket_type in ALLOWED_TYPES:
+            if ticket_type.lower() in q:
+                filters_dict["ticket_type"] = ticket_type
+                break
+
+        dates = re.findall(r"\b\d{4}-\d{2}-\d{2}\b", query)
+        if len(dates) >= 1:
+            filters_dict["date_from"] = dates[0]
+        if len(dates) >= 2:
+            filters_dict["date_to"] = dates[1]
+
+        filters = _sanitize_filters(filters_dict, known_offices, known_cities)
+        return intent, filters
+
+
+def _sanitize_filters(raw: dict[str, Any], known_offices: list[str], known_cities: list[str]) -> AssistantFilters:
+    office_lookup = {office.lower(): office for office in known_offices}
+    city_lookup = {city.lower(): city for city in known_cities}
+
+    office_names = []
+    for value in raw.get("office_names") or []:
+        if not isinstance(value, str):
+            continue
+        normalized = office_lookup.get(value.strip().lower())
+        if normalized and normalized not in office_names:
+            office_names.append(normalized)
+
+    cities = []
+    for value in raw.get("cities") or []:
+        if not isinstance(value, str):
+            continue
+        normalized = city_lookup.get(value.strip().lower())
+        if normalized and normalized not in cities:
+            cities.append(normalized)
+
+    segment = raw.get("segment") if raw.get("segment") in ALLOWED_SEGMENTS else None
+    ticket_type = raw.get("ticket_type") if raw.get("ticket_type") in ALLOWED_TYPES else None
+    language = raw.get("language") if raw.get("language") in ALLOWED_LANGUAGES else None
+
+    date_from = raw.get("date_from") if _parse_iso_date(raw.get("date_from")) else None
+    date_to = raw.get("date_to") if _parse_iso_date(raw.get("date_to")) else None
+
+    run_id = raw.get("run_id")
+    if not isinstance(run_id, str) or not run_id.strip():
+        run_id = None
+
+    return AssistantFilters(
+        office_names=office_names,
+        cities=cities,
+        date_from=date_from,
+        date_to=date_to,
+        segment=segment,
+        ticket_type=ticket_type,
+        language=language,
+        run_id=run_id,
+    )
+
+
+def _ordered_labels(labels: Any, preferred_order: list[str]) -> list[str]:
+    """Order labels by caller preference, then alphabetically for the rest."""
+    values = list(labels)
+    if not preferred_order:
+        return sorted(values)
+
+    rank = {label: index for index, label in enumerate(preferred_order)}
+    return sorted(values, key=lambda value: (rank.get(value, 10**6), value))
+
+
+def _parse_iso_date(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value.strip())
+    except ValueError:
+        return None
+
+
+def _parse_date_range(date_from: str | None, date_to: str | None) -> tuple[datetime | None, datetime | None]:
+    start = _parse_iso_date(date_from)
+    end = _parse_iso_date(date_to)
+
+    if start and start.time() == dtime(0, 0, 0):
+        start = datetime.combine(start.date(), dtime.min)
+    if end and end.time() == dtime(0, 0, 0):
+        end = datetime.combine(end.date(), dtime.max)
+
+    return start, end
+
+
+def _age_from_birth_date(value: str | None) -> int | None:
+    if not value:
+        return None
+
+    text = str(value).strip().split(" ")[0]
+    try:
+        birth = date.fromisoformat(text)
+    except ValueError:
+        return None
+
+    today = date.today()
+    years = today.year - birth.year
+    if (today.month, today.day) < (birth.month, birth.day):
+        years -= 1
+    return years if years >= 0 else None

@@ -1,4 +1,5 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { useAppState } from '../state/AppStateContext'
 
 const titles: Record<string, string> = {
   '/upload': 'Upload & Process',
@@ -8,12 +9,38 @@ const titles: Record<string, string> = {
 
 function AppShell() {
   const location = useLocation()
+  const { latestRun } = useAppState()
   const title = titles[location.pathname] ?? 'FIRE Dashboard'
   const dayLabel = new Intl.DateTimeFormat('en-US', {
     weekday: 'long',
     month: 'short',
     day: 'numeric',
   }).format(new Date())
+
+  const canExport = Boolean(latestRun?.results.length)
+
+  const stringifyCsvValue = (value: unknown) => {
+    if (Array.isArray(value)) return JSON.stringify(value.join(' | '))
+    if (value && typeof value === 'object') return JSON.stringify(JSON.stringify(value))
+    return JSON.stringify(value ?? '')
+  }
+
+  function exportLatestRun() {
+    if (!latestRun?.results.length) return
+
+    const headers = Object.keys(latestRun.results[0])
+    const rows = latestRun.results.map((row) =>
+      headers.map((key) => stringifyCsvValue((row as Record<string, unknown>)[key])).join(',')
+    )
+    const csv = [headers.join(','), ...rows].join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = latestRun.run_id ? `fire-results-${latestRun.run_id}.csv` : 'fire-results.csv'
+    anchor.click()
+    URL.revokeObjectURL(url)
+  }
 
   return (
     <div className="app">
@@ -59,11 +86,9 @@ function AppShell() {
             <h1>{title}</h1>
           </div>
           <div className="topbar-actions">
-            <div className="search">
-              <span className="search-icon" />
-              <input placeholder="Search tickets and managers" />
-            </div>
-            <button className="primary">Export report</button>
+            <button className="primary" onClick={exportLatestRun} disabled={!canExport}>
+              Export report
+            </button>
             <div className="avatar">AI</div>
           </div>
         </header>

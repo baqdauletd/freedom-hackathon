@@ -3,17 +3,20 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Header, Query, UploadFile
 from sqlalchemy import and_, asc, desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from backend.core.config import get_settings
-from backend.db.models import AIAnalysis, Assignment, BusinessUnit, Manager, Ticket
+from backend.db.models import AIAnalysis, Assignment, BusinessUnit, Manager, ProcessingJob, ProcessingRun, Ticket
 from backend.db.session import get_db
 from backend.schemas.tickets import (
     BatchResponse,
+    JobStatusResponse,
     ProcessSingleTicketRequest,
     ProcessedTicketResponse,
+    QueuedRunResponse,
+    RunStatusResponse,
     RoutingRunResponse,
 )
 from backend.services.ingestion import (
@@ -25,6 +28,7 @@ from backend.services.ingestion import (
     validate_tickets,
 )
 from backend.services.processing import process_tickets
+from backend.services.queue import enqueue_processing_job
 
 router = APIRouter(tags=["routing"])
 
@@ -40,6 +44,29 @@ def _parse_date(value: str | None) -> datetime | None:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
+
+
+def _iso(value: datetime | None) -> str | None:
+    return value.isoformat() if value else None
+
+
+def _job_status_payload(job: ProcessingJob, *, reused: bool = False) -> dict:
+    return {
+        "job_id": job.id,
+        "run_id": job.run_id,
+        "status": job.status,
+        "idempotency_key": job.idempotency_key,
+        "attempt_count": int(job.attempt_count or 0),
+        "max_attempts": int(job.max_attempts or 0),
+        "next_attempt_at": _iso(job.next_attempt_at),
+        "locked_at": _iso(job.locked_at),
+        "locked_by": job.locked_by,
+        "last_error": job.last_error,
+        "created_at": _iso(job.created_at),
+        "started_at": _iso(job.started_at),
+        "finished_at": _iso(job.finished_at),
+        "idempotency_reused": reused,
+    }
 
 
 def _to_result_item(
@@ -135,6 +162,45 @@ async def route_upload(
     return envelope
 
 
+@router.post("/route/upload/async", response_model=QueuedRunResponse)
+async def route_upload_async(
+    tickets: UploadFile = File(...),
+    managers: UploadFile = File(...),
+    business_units: UploadFile = File(...),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        tickets_rows = validate_tickets(parse_csv_bytes(await tickets.read()))
+        managers_rows = validate_managers(parse_csv_bytes(await managers.read()))
+        business_rows = validate_business_units(parse_csv_bytes(await business_units.read()))
+    except CSVValidationError as exc:
+        raise _bad_request(exc) from exc
+
+    enqueue = enqueue_processing_job(
+        db,
+        get_settings(),
+        tickets=tickets_rows,
+        managers=managers_rows,
+        business_units=business_rows,
+        source_filenames={
+            "tickets": tickets.filename or "tickets.csv",
+            "managers": managers.filename or "managers.csv",
+            "business_units": business_units.filename or "business_units.csv",
+        },
+        idempotency_key=idempotency_key,
+    )
+    run = db.get(ProcessingRun, enqueue.job.run_id)
+    if not run:
+        raise HTTPException(status_code=500, detail="Run creation failed")
+
+    return {
+        "run_id": run.id,
+        "run_status": run.status,
+        "job": _job_status_payload(enqueue.job, reused=enqueue.reused),
+    }
+
+
 @router.post("/tickets/process", response_model=ProcessedTicketResponse)
 def process_single_ticket(payload: ProcessSingleTicketRequest, db: Session = Depends(get_db)) -> dict:
     try:
@@ -175,6 +241,75 @@ async def process_ticket_batch(
         },
     )
     return BatchResponse(run_id=envelope["run_id"], summary=envelope["summary"], results=envelope["results"])
+
+
+@router.post("/tickets/batch/async", response_model=QueuedRunResponse)
+async def process_ticket_batch_async(
+    tickets: UploadFile = File(...),
+    managers: UploadFile = File(...),
+    business_units: UploadFile = File(...),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        tickets_rows = validate_tickets(parse_csv_bytes(await tickets.read()))
+        managers_rows = validate_managers(parse_csv_bytes(await managers.read()))
+        business_rows = validate_business_units(parse_csv_bytes(await business_units.read()))
+    except CSVValidationError as exc:
+        raise _bad_request(exc) from exc
+
+    enqueue = enqueue_processing_job(
+        db,
+        get_settings(),
+        tickets=tickets_rows,
+        managers=managers_rows,
+        business_units=business_rows,
+        source_filenames={
+            "tickets": tickets.filename or "tickets.csv",
+            "managers": managers.filename or "managers.csv",
+            "business_units": business_units.filename or "business_units.csv",
+        },
+        idempotency_key=idempotency_key,
+    )
+    run = db.get(ProcessingRun, enqueue.job.run_id)
+    if not run:
+        raise HTTPException(status_code=500, detail="Run creation failed")
+
+    return {
+        "run_id": run.id,
+        "run_status": run.status,
+        "job": _job_status_payload(enqueue.job, reused=enqueue.reused),
+    }
+
+
+@router.get("/runs/{run_id}/status", response_model=RunStatusResponse)
+def get_run_status(run_id: str, db: Session = Depends(get_db)) -> dict:
+    run = db.get(ProcessingRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    job = db.execute(select(ProcessingJob).where(ProcessingJob.run_id == run_id)).scalar_one_or_none()
+
+    return {
+        "run_id": run.id,
+        "status": run.status,
+        "summary": {
+            "total": int(run.tickets_total or 0),
+            "success": int(run.tickets_success or 0),
+            "failed": int(run.tickets_failed or 0),
+            "avg_processing_ms": int(run.avg_processing_ms or 0),
+            "elapsed_ms": int(run.elapsed_ms or 0),
+        },
+        "job": _job_status_payload(job) if job else None,
+    }
+
+
+@router.get("/jobs/{job_id}", response_model=JobStatusResponse)
+def get_job_status(job_id: str, db: Session = Depends(get_db)) -> dict:
+    job = db.get(ProcessingJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return _job_status_payload(job)
 
 
 @router.get("/results")

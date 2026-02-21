@@ -28,17 +28,11 @@ const buildPie = (data: SimpleDatum[]) => {
 }
 
 const normalizeAssistantSeries = (response: AssistantQueryResponse): SimpleDatum[] => {
-  if (!Array.isArray(response.table) || response.table.length === 0) return []
-  const output: SimpleDatum[] = []
-  response.table.forEach((row) => {
-    const keys = Object.keys(row)
-    if (keys.length < 2) return
-    const label = row[keys[0]]
-    const value = Number(row[keys[1]] ?? 0)
-    if (!Number.isFinite(value)) return
-    output.push({ label: String(label ?? "-"), value })
-  })
-  return output
+  if (!response?.data?.labels?.length || !response?.data?.values?.length) return []
+  return response.data.labels.map((label, index) => ({
+    label,
+    value: Number(response.data.values[index] ?? 0),
+  }))
 }
 
 function ChartCard({
@@ -50,9 +44,10 @@ function ChartCard({
   title: string
   description: string
   data: SimpleDatum[]
-  mode: "bar" | "pie"
+  mode: "bar" | "pie" | "line"
 }) {
   const max = Math.max(1, ...data.map((item) => item.value))
+
   return (
     <article className="panel chart-card">
       <div className="panel-header">
@@ -93,6 +88,34 @@ function ChartCard({
         </div>
       )}
     </article>
+  )
+}
+
+function AssistantTable({ rows }: { rows: Array<Record<string, unknown>> }) {
+  if (!rows.length) return <p className="muted">No table rows returned.</p>
+  const columns = Object.keys(rows[0])
+
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            {columns.map((col) => (
+              <th key={col}>{col}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, index) => (
+            <tr key={index}>
+              {columns.map((col) => (
+                <td key={`${index}-${col}`}>{String(row[col] ?? "-")}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   )
 }
 
@@ -200,6 +223,16 @@ function AnalyticsPage() {
     }
   }
 
+  const applyAssistantFilters = () => {
+    if (!assistantResult) return
+    const filters = assistantResult.filters
+
+    setOffice(filters.office_names[0] || "")
+    setDateFrom(filters.date_from || "")
+    setDateTo(filters.date_to || "")
+    setRunId(filters.run_id || "")
+  }
+
   return (
     <section className="analytics-page">
       <header className="panel">
@@ -264,37 +297,74 @@ function AnalyticsPage() {
           <h3>AI Command Center</h3>
           <p className="muted">Ask natural-language analytics questions and turn answers into visuals.</p>
         </div>
+
         <div className="assistant-controls">
           <input
             value={assistantQuery}
             onChange={(event) => setAssistantQuery(event.target.value)}
-            placeholder="Show distribution of complaint types by city"
+            placeholder="Показать средний возраст клиентов по офисам Астана и Алматы"
           />
           <button className="primary" onClick={submitAssistant} disabled={assistantLoading}>
             {assistantLoading ? "Running..." : "Ask assistant"}
           </button>
         </div>
+
         {assistantError ? <p className="error-text">{assistantError}</p> : null}
+
         {assistantResult ? (
           <div className="assistant-result">
             <div className="panel-header">
               <div>
                 <p className="muted">Intent: {assistantResult.intent}</p>
-                <h4>{assistantResult.suggested_title}</h4>
+                <h4>{assistantResult.title}</h4>
               </div>
-              <button className="ghost" onClick={() => pinChart(assistantResult)}>
-                Pin to dashboard
-              </button>
+              <div className="panel-actions">
+                <button className="ghost" onClick={() => setAssistantQuery(`${assistantQuery} по офису Астана`)}>
+                  Refine query
+                </button>
+                <button className="ghost" onClick={applyAssistantFilters}>
+                  Apply filters
+                </button>
+                <button className="ghost" onClick={() => pinChart(assistantResult)}>
+                  Pin to dashboard
+                </button>
+              </div>
             </div>
-            <p>{assistantResult.answer}</p>
+
+            <p>{assistantResult.explanation}</p>
+
             <ChartCard
               title="Assistant chart"
               description={`Suggested ${assistantResult.chart_type} visualization`}
               data={normalizeAssistantSeries(assistantResult)}
-              mode={assistantResult.chart_type === "pie" ? "pie" : "bar"}
+              mode={assistantResult.chart_type === "pie" ? "pie" : assistantResult.chart_type === "line" ? "line" : "bar"}
             />
+
+            <AssistantTable rows={assistantResult.table} />
+
+            <div className="chips-wrap">
+              {assistantResult.filters.office_names.map((name) => (
+                <span key={`office-${name}`} className="chip">
+                  office: {name}
+                </span>
+              ))}
+              {assistantResult.filters.cities.map((name) => (
+                <span key={`city-${name}`} className="chip">
+                  city: {name}
+                </span>
+              ))}
+              {assistantResult.filters.segment ? <span className="chip">segment: {assistantResult.filters.segment}</span> : null}
+              {assistantResult.filters.language ? <span className="chip">lang: {assistantResult.filters.language}</span> : null}
+              {assistantResult.filters.ticket_type ? (
+                <span className="chip">type: {assistantResult.filters.ticket_type}</span>
+              ) : null}
+              {assistantResult.filters.date_from ? <span className="chip">from: {assistantResult.filters.date_from}</span> : null}
+              {assistantResult.filters.date_to ? <span className="chip">to: {assistantResult.filters.date_to}</span> : null}
+            </div>
           </div>
-        ) : null}
+        ) : (
+          <p className="muted">Ask a query to generate chart + table + explanation.</p>
+        )}
       </section>
 
       <section className="panel">
@@ -309,10 +379,10 @@ function AnalyticsPage() {
           {pinnedCharts.map((chart, index) => (
             <ChartCard
               key={`${chart.intent}-${index}`}
-              title={chart.suggested_title}
-              description={chart.answer}
+              title={chart.title}
+              description={chart.explanation}
               data={normalizeAssistantSeries(chart)}
-              mode={chart.chart_type === "pie" ? "pie" : "bar"}
+              mode={chart.chart_type === "pie" ? "pie" : chart.chart_type === "line" ? "line" : "bar"}
             />
           ))}
         </div>

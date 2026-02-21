@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from backend.app import app
-from backend.db.models import AIAnalysis, Assignment, Base, BusinessUnit, Manager, ProcessingRun, Ticket
+from backend.db.models import AIAnalysis, Assignment, Base, BusinessUnit, Manager, ProcessingJob, ProcessingRun, Ticket
 from backend.db.session import get_db
 
 
@@ -203,6 +203,39 @@ def test_managers_endpoint_returns_assigned_count() -> None:
         assert len(payload["items"]) == 2
         first = payload["items"][0]
         assert "assigned_count" in first
+    finally:
+        app.dependency_overrides.clear()
+        client.close()
+        session.close()
+
+
+def test_run_and_job_status_endpoints() -> None:
+    client, session = _build_client()
+    try:
+        _, run_id = _seed(session)
+        with session.begin():
+            job = ProcessingJob(
+                run_id=run_id,
+                status="queued",
+                attempt_count=0,
+                max_attempts=3,
+                payload={"tickets": [], "managers": [], "business_units": []},
+            )
+            session.add(job)
+            session.flush()
+            job_id = job.id
+
+        run_response = client.get(f"/runs/{run_id}/status")
+        assert run_response.status_code == 200
+        run_payload = run_response.json()
+        assert run_payload["run_id"] == run_id
+        assert run_payload["job"]["job_id"] == job_id
+
+        job_response = client.get(f"/jobs/{job_id}")
+        assert job_response.status_code == 200
+        job_payload = job_response.json()
+        assert job_payload["job_id"] == job_id
+        assert job_payload["run_id"] == run_id
     finally:
         app.dependency_overrides.clear()
         client.close()

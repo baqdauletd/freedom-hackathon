@@ -55,6 +55,10 @@ class Settings:
     geocode_fail_streak_limit: int = _get_int("GEOCODE_FAIL_STREAK_LIMIT", 3)
 
     per_ticket_budget_ms: int = _get_int("PER_TICKET_BUDGET_MS", 10_000)
+    worker_poll_interval_seconds: float = _get_float("WORKER_POLL_INTERVAL_SECONDS", 1.0)
+    worker_max_attempts: int = _get_int("WORKER_MAX_ATTEMPTS", 3)
+    worker_retry_base_seconds: int = _get_int("WORKER_RETRY_BASE_SECONDS", 2)
+    worker_retry_max_seconds: int = _get_int("WORKER_RETRY_MAX_SECONDS", 60)
 
     tickets_csv_path: str = os.getenv("TICKETS_CSV", "tickets.csv")
     managers_csv_path: str = os.getenv("MANAGERS_CSV", "managers.csv")

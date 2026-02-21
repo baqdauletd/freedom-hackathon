@@ -598,15 +598,30 @@ tbody tr:hover {
   margin: 0 0 2px;
 }
 
-.trace-json {
-  margin: 0;
-  font-size: 0.75rem;
-  background: #0f1423;
-  color: #dbe1f7;
+.explain-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.explain-card {
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px;
-  max-height: 180px;
-  overflow: auto;
+  background: var(--surface-2);
+}
+
+.explain-card p {
+  margin: 0 0 6px;
+}
+
+.mini-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.84rem;
 }
 
 .charts-grid {
@@ -704,6 +719,27 @@ tbody tr:hover {
   gap: 10px;
 }
 
+.panel-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.chips-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  background: #f6f8fc;
+}
+
 @media (max-width: 1200px) {
   .app {
     grid-template-columns: 1fr;
@@ -778,6 +814,10 @@ tbody tr:hover {
   }
 
   .assistant-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .explain-grid {
     grid-template-columns: 1fr;
   }
 }

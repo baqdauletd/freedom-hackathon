@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from backend.core.config import get_settings
@@ -15,6 +15,6 @@ router = APIRouter(prefix="/assistant", tags=["assistant"])
 def assistant_query(payload: AssistantQueryRequest, db: Session = Depends(get_db)) -> dict:
     query = (payload.query or payload.prompt or "").strip()
     if not query:
-        query = "Show ticket distribution by city"
+        raise HTTPException(status_code=400, detail="Query is required")
     service = AnalyticsService(get_settings())
     return service.assistant_query(db, query)

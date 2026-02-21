@@ -33,6 +33,11 @@ const toSortableString = (value: unknown) => {
   return String(value || "").toLowerCase()
 }
 
+const asRecord = (value: unknown): Record<string, unknown> | null =>
+  value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null
+
+const asArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : [])
+
 function ResultsPage() {
   const [params] = useSearchParams()
   const runId = params.get("run_id") || undefined
@@ -178,6 +183,17 @@ function ResultsPage() {
   }
 
   const summary = latestRun?.summary
+  const trace = asRecord(detail?.assignment?.decision_trace)
+  const traceGeo = asRecord(trace?.geo)
+  const traceRules = asRecord(trace?.rules)
+  const traceRoundRobin = asRecord(trace?.round_robin)
+  const traceTopTwo = asArray(trace?.selected_top_two).map((row) => asRecord(row)).filter(Boolean) as Array<
+    Record<string, unknown>
+  >
+  const eligibilityRows = asArray(trace?.eligibility).map((row) => asRecord(row)).filter(Boolean) as Array<
+    Record<string, unknown>
+  >
+  const eligibleCount = eligibilityRows.filter((row) => row.eligible === true).length
 
   return (
     <section className="results-page">
@@ -425,12 +441,70 @@ function ResultsPage() {
               <p className="muted">
                 Assigned manager: {detail?.assignment?.assigned_manager || selected.assigned_manager || "-"}
               </p>
-              <p className="muted">
-                Top-2 pool: {(detail?.assignment?.selected_managers || selected.selected_managers || []).join(", ") || "-"}
-              </p>
-              <p className="muted">Round robin turn: {detail?.assignment?.rr_turn ?? "-"}</p>
-              {detail?.assignment?.decision_trace ? (
-                <pre className="trace-json">{JSON.stringify(detail.assignment.decision_trace, null, 2)}</pre>
+              {trace ? (
+                <div className="explain-grid">
+                  <div className="explain-card">
+                    <p className="muted">Geo decision</p>
+                    <p>
+                      Strategy: <strong>{String(traceGeo?.strategy || "not provided")}</strong>
+                    </p>
+                    <p className="muted">Fallback used: {traceGeo?.used_fallback === true ? "Yes" : "No"}</p>
+                    <p className="muted">
+                      Reason: {String(traceGeo?.fallback_reason || "nearest office / not provided")}
+                    </p>
+                    <p className="muted">
+                      Distance:{" "}
+                      {typeof traceGeo?.nearest_distance_km === "number"
+                        ? `${Number(traceGeo.nearest_distance_km).toFixed(2)} km`
+                        : "not provided"}
+                    </p>
+                  </div>
+                  <div className="explain-card">
+                    <p className="muted">Rule requirements</p>
+                    <p className="muted">
+                      VIP required: {traceRules?.requires_vip === true ? "Yes" : "No"}
+                    </p>
+                    <p className="muted">
+                      Chief specialist required: {traceRules?.requires_glav_spec === true ? "Yes" : "No"}
+                    </p>
+                    <p className="muted">
+                      Language requirement: {String(traceRules?.required_language || "No strict requirement")}
+                    </p>
+                    <p className="muted">
+                      Eligible managers: {eligibleCount} / {eligibilityRows.length}
+                    </p>
+                  </div>
+                  <div className="explain-card">
+                    <p className="muted">Top-2 candidates</p>
+                    {traceTopTwo.length ? (
+                      <ul className="mini-list">
+                        {traceTopTwo.map((row, index) => (
+                          <li key={`${String(row.manager_id || row.manager_name)}-${index}`}>
+                            {String(row.manager_name || "Unknown")} (load {String(row.current_load ?? "-")})
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="muted">
+                        {(detail?.assignment?.selected_managers || selected.selected_managers || []).join(", ") ||
+                          "No candidates"}
+                      </p>
+                    )}
+                  </div>
+                  <div className="explain-card">
+                    <p className="muted">Round robin</p>
+                    <p className="muted">Turn used: {String(traceRoundRobin?.turn_used ?? detail?.assignment?.rr_turn ?? "-")}</p>
+                    <p className="muted">
+                      Assigned:{" "}
+                      {String(
+                        traceRoundRobin?.assigned_manager_name ||
+                          detail?.assignment?.assigned_manager ||
+                          selected.assigned_manager ||
+                          "-"
+                      )}
+                    </p>
+                  </div>
+                </div>
               ) : (
                 <p className="muted">Detailed decision trace is not available for this ticket.</p>
               )}
