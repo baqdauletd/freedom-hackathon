@@ -21,11 +21,14 @@
   gap: 12px;
 }
 
-.brand-mark {
-  width: 36px;
-  height: 36px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #ff6b4a, #2f6cfb);
+.brand-logo {
+  width: 48px;
+  height: 48px;
+  border-radius: 0;
+  object-fit: contain;
+  background: transparent;
+  border: none;
+  padding: 0;
 }
 
 .brand-name {
@@ -345,7 +348,7 @@ button:disabled {
 }
 
 .status-dot.green {
-  background: #21b573;
+  background: var(--accent);
 }
 
 .status-label {
@@ -353,8 +356,8 @@ button:disabled {
 }
 
 .highlight {
-  background: linear-gradient(135deg, #151a2d, #2f2e48);
-  color: #f5f7ff;
+  background: linear-gradient(135deg, #0c111a, #1f5019);
+  color: #ffffff;
   align-items: flex-start;
 }
 

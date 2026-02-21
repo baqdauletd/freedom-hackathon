@@ -254,31 +254,6 @@ function UploadDashboard() {
       </section>
 
       <section className="status">
-        <div className="status-card">
-          <p className="status-title">What gets processed</p>
-          <div className="status-row">
-            <span className="status-dot" />
-            <div>
-              <p className="status-label">AI enrichment</p>
-              <p className="muted">Type, tone, language, priority, summary, recommendation</p>
-            </div>
-          </div>
-          <div className="status-row">
-            <span className="status-dot amber" />
-            <div>
-              <p className="status-label">Routing logic</p>
-              <p className="muted">Geo office decision, hard skills filter, round-robin balancing</p>
-            </div>
-          </div>
-          <div className="status-row">
-            <span className="status-dot green" />
-            <div>
-              <p className="status-label">Dashboard outputs</p>
-              <p className="muted">Table filters, analytics charts, and explainability drawer</p>
-            </div>
-          </div>
-        </div>
-
         <div className="status-card highlight">
           <p className="highlight-title">Ready for review</p>
           <p className="highlight-text">

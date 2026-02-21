@@ -19,7 +19,11 @@ function AppShell() {
     <div className="app">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark" />
+          <img
+            className="brand-logo"
+            src="https://yt3.googleusercontent.com/ytc/AIdro_n5YlppjJyhRbNi1vOal0MzfDmVXaVyfO4LlT03uPQjTsc=s900-c-k-c0x00ffffff-no-rj"
+            alt="Freedom Bank logo"
+          />
           <div>
             <p className="brand-name">FreedomOps</p>
             <p className="brand-sub">After-hours routing</p>
@@ -46,14 +50,6 @@ function AppShell() {
             Analytics
           </NavLink>
         </nav>
-        <div className="sidebar-card">
-          <p className="sidebar-title">AI status</p>
-          <p className="sidebar-value">96% confidence</p>
-          <p className="sidebar-note">NLP + geocoding healthy</p>
-          <div className="progress">
-            <span style={{ width: '96%' }} />
-          </div>
-        </div>
       </aside>
 
       <main className="main">
