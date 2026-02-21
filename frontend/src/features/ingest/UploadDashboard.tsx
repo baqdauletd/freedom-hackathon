@@ -176,7 +176,11 @@ function UploadDashboard() {
           <button
             className="ghost"
             type="button"
-            onClick={() => navigate("/results")}
+            onClick={() =>
+              navigate(
+                latestRun?.run_id ? `/results?run_id=${encodeURIComponent(latestRun.run_id)}` : "/results",
+              )
+            }
             disabled={!latestRun?.results.length}
           >
             Open last results
@@ -260,7 +264,14 @@ function UploadDashboard() {
             After processing you can drill into each ticket, see routing evidence, and open the AI
             command center for ad-hoc analytics.
           </p>
-          <button className="ghost" onClick={() => navigate("/analytics")}>
+          <button
+            className="ghost"
+            onClick={() =>
+              navigate(
+                latestRun?.run_id ? `/analytics?run_id=${encodeURIComponent(latestRun.run_id)}` : "/analytics",
+              )
+            }
+          >
             Open analytics
           </button>
         </div>

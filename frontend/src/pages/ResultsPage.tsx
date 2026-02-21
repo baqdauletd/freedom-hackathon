@@ -16,6 +16,8 @@ type FilterState = {
 }
 
 const PAGE_SIZE = 25
+const MANAGER_ID_PREFIX = "id:"
+const MANAGER_NAME_PREFIX = "name:"
 
 const initialFilters: FilterState = {
   segment: "",
@@ -38,14 +40,37 @@ const asRecord = (value: unknown): Record<string, unknown> | null =>
 
 const asArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : [])
 
-function ResultsPage() {
-  const [params] = useSearchParams()
-  const runId = params.get("run_id") || undefined
-  const { latestRun } = useAppState()
+const parseManagerFilter = (value: string): { managerId?: number; managerName?: string } => {
+  if (!value) return {}
 
-  const [filters, setFilters] = useState<FilterState>(initialFilters)
-  const [dateFrom, setDateFrom] = useState("")
-  const [dateTo, setDateTo] = useState("")
+  if (value.startsWith(MANAGER_ID_PREFIX)) {
+    const parsed = Number(value.slice(MANAGER_ID_PREFIX.length))
+    return Number.isFinite(parsed) ? { managerId: parsed } : {}
+  }
+
+  if (value.startsWith(MANAGER_NAME_PREFIX)) {
+    const managerName = value.slice(MANAGER_NAME_PREFIX.length).trim()
+    return managerName ? { managerName } : {}
+  }
+
+  const parsed = Number(value)
+  if (Number.isFinite(parsed)) return { managerId: parsed }
+
+  return { managerName: value.trim() || undefined }
+}
+
+function ResultsPage() {
+  const [params, setParams] = useSearchParams()
+  const runIdFromParams = params.get("run_id") || undefined
+  const officeFromParams = params.get("office") || ""
+  const dateFromParams = params.get("date_from") || ""
+  const dateToParams = params.get("date_to") || ""
+  const { latestRun } = useAppState()
+  const runId = runIdFromParams || latestRun?.run_id || undefined
+
+  const [filters, setFilters] = useState<FilterState>({ ...initialFilters, office: officeFromParams })
+  const [dateFrom, setDateFrom] = useState(dateFromParams)
+  const [dateTo, setDateTo] = useState(dateToParams)
   const [items, setItems] = useState<RouteResult[]>([])
   const [total, setTotal] = useState(0)
   const [offset, setOffset] = useState(0)
@@ -59,6 +84,23 @@ function ResultsPage() {
 
   const usesLocalData = !runId && Boolean(latestRun?.results.length)
 
+  useEffect(() => {
+    const next = new URLSearchParams(params)
+    const setOrDelete = (key: string, value?: string) => {
+      if (value) next.set(key, value)
+      else next.delete(key)
+    }
+
+    setOrDelete("run_id", runId)
+    setOrDelete("office", filters.office)
+    setOrDelete("date_from", dateFrom)
+    setOrDelete("date_to", dateTo)
+
+    if (next.toString() !== params.toString()) {
+      setParams(next, { replace: true })
+    }
+  }, [dateFrom, dateTo, filters.office, params, runId, setParams])
+
   const localFiltered = useMemo(() => {
     if (!usesLocalData || !latestRun) return []
 
@@ -69,7 +111,11 @@ function ResultsPage() {
       if (filters.language && row.language !== filters.language) return false
       if (filters.city && (row.city || "") !== filters.city) return false
       if (filters.office && row.office !== filters.office) return false
-      if (filters.managerId && String(row.manager_id || "") !== filters.managerId) return false
+      if (filters.managerId) {
+        const { managerId, managerName } = parseManagerFilter(filters.managerId)
+        if (managerId !== undefined && row.manager_id !== managerId) return false
+        if (managerName && (row.assigned_manager || "") !== managerName) return false
+      }
       if (dateFrom || dateTo) {
         const createdAt = row.created_at ? new Date(row.created_at) : null
         if (!createdAt || Number.isNaN(createdAt.getTime())) return false
@@ -107,6 +153,8 @@ function ResultsPage() {
     setLoading(true)
     setError("")
 
+    const managerFilter = parseManagerFilter(filters.managerId)
+
     getResults({
       run_id: runId,
       office: filters.office || undefined,
@@ -114,7 +162,8 @@ function ResultsPage() {
       type: filters.type || undefined,
       tone: filters.tone || undefined,
       language: filters.language || undefined,
-      manager_id: filters.managerId ? Number(filters.managerId) : undefined,
+      manager_id: managerFilter.managerId,
+      manager: managerFilter.managerName,
       segment: filters.segment || undefined,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
@@ -152,6 +201,25 @@ function ResultsPage() {
     const source = usesLocalData ? localFiltered : items
     const distinct = (values: string[]) =>
       Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b))
+    const managerMap = new Map<string, { id: string; label: string }>()
+
+    source.forEach((row) => {
+      const managerName = (row.assigned_manager || "").trim()
+      if (!managerName) return
+
+      if (typeof row.manager_id === "number") {
+        const key = `${MANAGER_ID_PREFIX}${row.manager_id}`
+        if (!managerMap.has(key)) {
+          managerMap.set(key, { id: key, label: `${managerName} (#${row.manager_id})` })
+        }
+        return
+      }
+
+      const key = `${MANAGER_NAME_PREFIX}${managerName}`
+      if (!managerMap.has(key)) {
+        managerMap.set(key, { id: key, label: managerName })
+      }
+    })
 
     return {
       segments: distinct(source.map((row) => row.segment || "")),
@@ -160,13 +228,7 @@ function ResultsPage() {
       languages: distinct(source.map((row) => row.language)),
       cities: distinct(source.map((row) => row.city || "")),
       offices: distinct(source.map((row) => row.office)),
-      managers: Array.from(
-        new Map(
-          source
-            .filter((row) => typeof row.manager_id === "number")
-            .map((row) => [String(row.manager_id), { id: String(row.manager_id), label: `${row.assigned_manager || "Unknown"} (#${row.manager_id})` }]),
-        ).values(),
-      ).sort((a, b) => a.label.localeCompare(b.label)),
+      managers: Array.from(managerMap.values()).sort((a, b) => a.label.localeCompare(b.label)),
     }
   }, [items, localFiltered, usesLocalData])
 

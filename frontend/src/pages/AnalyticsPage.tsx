@@ -120,19 +120,27 @@ function AssistantTable({ rows }: { rows: Array<Record<string, unknown>> }) {
 }
 
 function AnalyticsPage() {
-  const [params] = useSearchParams()
-  const initialRunId = params.get("run_id") || ""
+  const [params, setParams] = useSearchParams()
+  const { latestRun, pinnedCharts, pinChart, clearPinnedCharts } = useAppState()
+  const initialRunId = params.get("run_id") || latestRun?.run_id || ""
+  const initialOffice = params.get("office") || ""
+  const initialDateFrom = params.get("date_from") || ""
+  const initialDateTo = params.get("date_to") || ""
 
-  const { pinnedCharts, pinChart, clearPinnedCharts } = useAppState()
   const [runId, setRunId] = useState(initialRunId)
-  const [office, setOffice] = useState("")
-  const [dateFrom, setDateFrom] = useState("")
-  const [dateTo, setDateTo] = useState("")
+  const [office, setOffice] = useState(initialOffice)
+  const [dateFrom, setDateFrom] = useState(initialDateFrom)
+  const [dateTo, setDateTo] = useState(initialDateTo)
   const [summary, setSummary] = useState<{
     ticket_types_by_city: Array<{ city: string; ticket_type: string; count: number }>
     sentiment_distribution: Array<{ tone: string; count: number }>
     avg_priority_by_office: Array<{ office: string; avg_priority: number }>
-    workload_by_manager: Array<{ manager: string; current_load: number; assigned_ticket_count: number }>
+    workload_by_manager: Array<{
+      manager_id: number
+      manager_name: string
+      current_load: number
+      assigned_ticket_count: number
+    }>
   } | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
@@ -141,6 +149,29 @@ function AnalyticsPage() {
   const [assistantLoading, setAssistantLoading] = useState(false)
   const [assistantError, setAssistantError] = useState("")
   const [assistantResult, setAssistantResult] = useState<AssistantQueryResponse | null>(null)
+
+  useEffect(() => {
+    if (!runId && latestRun?.run_id) {
+      setRunId(latestRun.run_id)
+    }
+  }, [latestRun?.run_id, runId])
+
+  useEffect(() => {
+    const next = new URLSearchParams(params)
+    const setOrDelete = (key: string, value: string) => {
+      if (value) next.set(key, value)
+      else next.delete(key)
+    }
+
+    setOrDelete("run_id", runId)
+    setOrDelete("office", office)
+    setOrDelete("date_from", dateFrom)
+    setOrDelete("date_to", dateTo)
+
+    if (next.toString() !== params.toString()) {
+      setParams(next, { replace: true })
+    }
+  }, [dateFrom, dateTo, office, params, runId, setParams])
 
   useEffect(() => {
     let alive = true
@@ -164,18 +195,23 @@ function AnalyticsPage() {
       .then(([analyticsPayload, managersPayload]) => {
         if (!alive) return
         const managerItems = ((managersPayload as { items?: ManagerListItem[] }).items || []).map((manager) => ({
-          manager: manager.full_name,
+          manager_id: manager.id,
+          manager_name: manager.full_name,
           current_load: manager.current_load,
           assigned_ticket_count: manager.assigned_count,
-          assigned_count: manager.assigned_count,
-          office: manager.office,
         }))
 
         const analytics = analyticsPayload as {
           ticket_types_by_city: Array<{ city: string; ticket_type: string; count: number }>
           sentiment_distribution: Array<{ tone: string; count: number }>
           avg_priority_by_office: Array<{ office: string; avg_priority: number }>
-          workload_by_manager?: Array<{ manager: string; current_load: number; assigned_ticket_count: number }>
+          workload_by_manager?: Array<{
+            manager_id: number
+            manager: string
+            manager_name: string
+            current_load: number
+            assigned_ticket_count: number
+          }>
         }
 
         setSummary({
@@ -211,7 +247,10 @@ function AnalyticsPage() {
       typeByCity: Object.entries(typeByCity).map(([label, value]) => ({ label, value })),
       sentiment: toSeries(summary.sentiment_distribution, "tone", "count"),
       avgPriority: toSeries(summary.avg_priority_by_office, "office", "avg_priority"),
-      workload: toSeries(summary.workload_by_manager, "manager", "assigned_ticket_count"),
+      workload: summary.workload_by_manager.map((row) => ({
+        label: `${row.manager_name} (#${row.manager_id})`,
+        value: Number(row.assigned_ticket_count || 0),
+      })),
     }
   }, [summary])
 
