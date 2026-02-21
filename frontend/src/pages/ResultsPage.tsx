@@ -11,7 +11,7 @@ type FilterState = {
   language: string
   city: string
   office: string
-  manager: string
+  managerId: string
   search: string
 }
 
@@ -24,7 +24,7 @@ const initialFilters: FilterState = {
   language: "",
   city: "",
   office: "",
-  manager: "",
+  managerId: "",
   search: "",
 }
 
@@ -44,6 +44,8 @@ function ResultsPage() {
   const { latestRun } = useAppState()
 
   const [filters, setFilters] = useState<FilterState>(initialFilters)
+  const [dateFrom, setDateFrom] = useState("")
+  const [dateTo, setDateTo] = useState("")
   const [items, setItems] = useState<RouteResult[]>([])
   const [total, setTotal] = useState(0)
   const [offset, setOffset] = useState(0)
@@ -67,7 +69,13 @@ function ResultsPage() {
       if (filters.language && row.language !== filters.language) return false
       if (filters.city && (row.city || "") !== filters.city) return false
       if (filters.office && row.office !== filters.office) return false
-      if (filters.manager && (row.assigned_manager || "") !== filters.manager) return false
+      if (filters.managerId && String(row.manager_id || "") !== filters.managerId) return false
+      if (dateFrom || dateTo) {
+        const createdAt = row.created_at ? new Date(row.created_at) : null
+        if (!createdAt || Number.isNaN(createdAt.getTime())) return false
+        if (dateFrom && createdAt < new Date(`${dateFrom}T00:00:00`)) return false
+        if (dateTo && createdAt > new Date(`${dateTo}T23:59:59`)) return false
+      }
       if (filters.search) {
         const needle = filters.search.toLowerCase()
         const source = `${row.ticket_id} ${row.summary} ${row.description || ""}`.toLowerCase()
@@ -86,7 +94,7 @@ function ResultsPage() {
     })
 
     return sorted
-  }, [filters, latestRun, sortBy, sortOrder, usesLocalData])
+  }, [dateFrom, dateTo, filters, latestRun, sortBy, sortOrder, usesLocalData])
 
   useEffect(() => {
     if (usesLocalData) {
@@ -106,8 +114,10 @@ function ResultsPage() {
       type: filters.type || undefined,
       tone: filters.tone || undefined,
       language: filters.language || undefined,
-      manager: filters.manager || undefined,
+      manager_id: filters.managerId ? Number(filters.managerId) : undefined,
       segment: filters.segment || undefined,
+      date_from: dateFrom || undefined,
+      date_to: dateTo || undefined,
       search: filters.search || undefined,
       sort_by: sortBy,
       sort_order: sortOrder,
@@ -132,11 +142,11 @@ function ResultsPage() {
     return () => {
       alive = false
     }
-  }, [filters, localFiltered, offset, runId, sortBy, sortOrder, usesLocalData])
+  }, [dateFrom, dateTo, filters, localFiltered, offset, runId, sortBy, sortOrder, usesLocalData])
 
   useEffect(() => {
     setOffset(0)
-  }, [filters, sortBy, sortOrder, runId])
+  }, [dateFrom, dateTo, filters, sortBy, sortOrder, runId])
 
   const options = useMemo(() => {
     const source = usesLocalData ? localFiltered : items
@@ -150,7 +160,13 @@ function ResultsPage() {
       languages: distinct(source.map((row) => row.language)),
       cities: distinct(source.map((row) => row.city || "")),
       offices: distinct(source.map((row) => row.office)),
-      managers: distinct(source.map((row) => row.assigned_manager || "")),
+      managers: Array.from(
+        new Map(
+          source
+            .filter((row) => typeof row.manager_id === "number")
+            .map((row) => [String(row.manager_id), { id: String(row.manager_id), label: `${row.assigned_manager || "Unknown"} (#${row.manager_id})` }]),
+        ).values(),
+      ).sort((a, b) => a.label.localeCompare(b.label)),
     }
   }, [items, localFiltered, usesLocalData])
 
@@ -310,16 +326,24 @@ function ResultsPage() {
           <label>
             Assigned manager
             <select
-              value={filters.manager}
-              onChange={(event) => setFilters((prev) => ({ ...prev, manager: event.target.value }))}
+              value={filters.managerId}
+              onChange={(event) => setFilters((prev) => ({ ...prev, managerId: event.target.value }))}
             >
               <option value="">All</option>
-              {options.managers.map((value) => (
-                <option key={value} value={value}>
-                  {value}
+              {options.managers.map((manager) => (
+                <option key={manager.id} value={manager.id}>
+                  {manager.label}
                 </option>
               ))}
             </select>
+          </label>
+          <label>
+            Date from
+            <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+          </label>
+          <label>
+            Date to
+            <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
           </label>
         </div>
       </section>
@@ -480,7 +504,7 @@ function ResultsPage() {
                       <ul className="mini-list">
                         {traceTopTwo.map((row, index) => (
                           <li key={`${String(row.manager_id || row.manager_name)}-${index}`}>
-                            {String(row.manager_name || "Unknown")} (load {String(row.current_load ?? "-")})
+                            {String(row.manager_name || "Unknown")} (current load snapshot {String(row.current_load ?? "-")})
                           </li>
                         ))}
                       </ul>

@@ -132,7 +132,7 @@ function AnalyticsPage() {
     ticket_types_by_city: Array<{ city: string; ticket_type: string; count: number }>
     sentiment_distribution: Array<{ tone: string; count: number }>
     avg_priority_by_office: Array<{ office: string; avg_priority: number }>
-    workload_by_manager: Array<{ manager: string; current_load: number }>
+    workload_by_manager: Array<{ manager: string; current_load: number; assigned_ticket_count: number }>
   } | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
@@ -154,13 +154,19 @@ function AnalyticsPage() {
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
       }),
-      getManagers({ run_id: runId || undefined, office: office || undefined }),
+      getManagers({
+        run_id: runId || undefined,
+        office: office || undefined,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
+      }),
     ])
       .then(([analyticsPayload, managersPayload]) => {
         if (!alive) return
         const managerItems = ((managersPayload as { items?: ManagerListItem[] }).items || []).map((manager) => ({
           manager: manager.full_name,
           current_load: manager.current_load,
+          assigned_ticket_count: manager.assigned_count,
           assigned_count: manager.assigned_count,
           office: manager.office,
         }))
@@ -169,7 +175,7 @@ function AnalyticsPage() {
           ticket_types_by_city: Array<{ city: string; ticket_type: string; count: number }>
           sentiment_distribution: Array<{ tone: string; count: number }>
           avg_priority_by_office: Array<{ office: string; avg_priority: number }>
-          workload_by_manager?: Array<{ manager: string; current_load: number }>
+          workload_by_manager?: Array<{ manager: string; current_load: number; assigned_ticket_count: number }>
         }
 
         setSummary({
@@ -205,7 +211,7 @@ function AnalyticsPage() {
       typeByCity: Object.entries(typeByCity).map(([label, value]) => ({ label, value })),
       sentiment: toSeries(summary.sentiment_distribution, "tone", "count"),
       avgPriority: toSeries(summary.avg_priority_by_office, "office", "avg_priority"),
-      workload: toSeries(summary.workload_by_manager, "manager", "current_load"),
+      workload: toSeries(summary.workload_by_manager, "manager", "assigned_ticket_count"),
     }
   }, [summary])
 
@@ -285,8 +291,8 @@ function AnalyticsPage() {
           mode="bar"
         />
         <ChartCard
-          title="Workload by manager"
-          description="Current load across managers."
+          title="Assigned tickets by manager"
+          description="Assigned tickets in selected scope (run/date/office)."
           data={chartData?.workload || []}
           mode="bar"
         />

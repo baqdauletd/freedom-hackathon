@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, time as dtime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Header, Query, UploadFile
@@ -37,13 +37,16 @@ def _bad_request(error: CSVValidationError) -> HTTPException:
     return HTTPException(status_code=400, detail=error.message)
 
 
-def _parse_date(value: str | None) -> datetime | None:
+def _parse_date(value: str | None, *, end_of_day: bool = False) -> datetime | None:
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(value)
     except ValueError:
         return None
+    if "T" not in value and " " not in value:
+        return datetime.combine(parsed.date(), dtime.max if end_of_day else dtime.min)
+    return parsed
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -89,6 +92,7 @@ def _to_result_item(
         "recommendation": analysis.recommendation if analysis else "",
         "office": office.office if office else "",
         "selected_managers": assignment.selected_pair_snapshot if assignment else [],
+        "manager_id": manager.id if manager else None,
         "assigned_manager": manager.full_name if manager else None,
         "ticket_lat": analysis.ticket_lat if analysis else None,
         "ticket_lon": analysis.ticket_lon if analysis else None,
@@ -316,12 +320,16 @@ def get_job_status(job_id: str, db: Session = Depends(get_db)) -> dict:
 def get_results(
     run_id: str | None = None,
     office: str | None = None,
+    office_id: int | None = Query(default=None),
     city: str | None = None,
     type: str | None = Query(default=None, alias="type"),
     tone: str | None = None,
     language: str | None = None,
+    manager_id: int | None = Query(default=None),
     manager: str | None = None,
     segment: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
     search: str | None = None,
     sort_by: Literal["priority", "processing_ms", "created_at"] = "created_at",
     sort_order: Literal["asc", "desc"] = "desc",
@@ -329,6 +337,9 @@ def get_results(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ) -> dict:
+    parsed_from = _parse_date(date_from)
+    parsed_to = _parse_date(date_to, end_of_day=True)
+
     statement = (
         select(Ticket, AIAnalysis, Assignment, BusinessUnit, Manager)
         .outerjoin(AIAnalysis, AIAnalysis.ticket_id == Ticket.id)
@@ -342,6 +353,8 @@ def get_results(
         filters.append(Ticket.run_id == run_id)
     if office:
         filters.append(BusinessUnit.office == office)
+    if office_id:
+        filters.append(BusinessUnit.id == office_id)
     if city:
         filters.append(Ticket.city == city)
     if type:
@@ -350,10 +363,16 @@ def get_results(
         filters.append(AIAnalysis.tone == tone)
     if language:
         filters.append(AIAnalysis.language == language)
+    if manager_id is not None:
+        filters.append(Manager.id == manager_id)
     if manager:
         filters.append(Manager.full_name == manager)
     if segment:
         filters.append(Ticket.segment == segment)
+    if parsed_from:
+        filters.append(Assignment.assigned_at >= parsed_from)
+    if parsed_to:
+        filters.append(Assignment.assigned_at <= parsed_to)
     if search:
         needle = f"%{search.lower()}%"
         filters.append(or_(func.lower(Ticket.external_id).like(needle), func.lower(Ticket.description).like(needle)))
@@ -432,6 +451,7 @@ def get_ticket_details(ticket_id: str, db: Session = Depends(get_db)) -> dict:
             "office": office.office if office else "",
             "office_lat": office.latitude if office else None,
             "office_lon": office.longitude if office else None,
+            "manager_id": manager.id if manager else None,
             "assigned_manager": manager.full_name if manager else None,
             "selected_managers": assignment.selected_pair_snapshot if assignment else [],
             "rr_turn": assignment.rr_turn if assignment else 0,
@@ -446,12 +466,13 @@ def get_ticket_details(ticket_id: str, db: Session = Depends(get_db)) -> dict:
 def get_managers(
     run_id: str | None = None,
     office: str | None = None,
+    office_id: int | None = Query(default=None),
     date_from: str | None = None,
     date_to: str | None = None,
     db: Session = Depends(get_db),
 ) -> dict:
     parsed_from = _parse_date(date_from)
-    parsed_to = _parse_date(date_to)
+    parsed_to = _parse_date(date_to, end_of_day=True)
 
     count_stmt = (
         select(
@@ -487,6 +508,8 @@ def get_managers(
 
     if office:
         statement = statement.where(BusinessUnit.office == office)
+    if office_id:
+        statement = statement.where(BusinessUnit.id == office_id)
 
     rows = db.execute(statement).all()
     items = [

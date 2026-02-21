@@ -22,6 +22,7 @@ class ProcessedTicketResponse(BaseModel):
     recommendation: str
     office: str
     selected_managers: list[str]
+    manager_id: int | None = None
     assigned_manager: str | None
     ticket_lat: float | None = None
     ticket_lon: float | None = None

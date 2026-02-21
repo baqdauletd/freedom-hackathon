@@ -34,6 +34,7 @@ AllowedChartType = Literal["bar", "line", "pie", "table"]
 
 class AssistantFilters(BaseModel):
     office_names: list[str] = Field(default_factory=list)
+    office_ids: list[int] = Field(default_factory=list)
     cities: list[str] = Field(default_factory=list)
     date_from: str | None = None
     date_to: str | None = None

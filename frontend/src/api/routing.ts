@@ -79,12 +79,16 @@ export const uploadAndRoute = async (files: {
 type ResultsQuery = {
   run_id?: string
   office?: string
+  office_id?: number
   city?: string
   type?: string
   tone?: string
   language?: string
+  manager_id?: number
   manager?: string
   segment?: string
+  date_from?: string
+  date_to?: string
   search?: string
   sort_by?: string
   sort_order?: "asc" | "desc"
@@ -108,6 +112,7 @@ export const getTicketDetail = async (ticketId: string | number) =>
 export const getManagers = async (query?: {
   run_id?: string
   office?: string
+  office_id?: number
   date_from?: string
   date_to?: string
 }) =>

@@ -11,6 +11,7 @@ export type RouteResult = {
   recommendation: string
   office: string
   selected_managers: string[]
+  manager_id?: number | null
   assigned_manager: string | null
   ticket_lat?: number | null
   ticket_lon?: number | null
@@ -73,6 +74,7 @@ export type TicketDetailResponse = {
     office: string
     office_lat: number | null
     office_lon: number | null
+    manager_id?: number | null
     assigned_manager: string | null
     selected_managers: string[]
     rr_turn: number
@@ -100,7 +102,15 @@ export type AnalyticsSummaryResponse = {
   sentiment_distribution: Array<{ tone: string; count: number }>
   avg_priority_by_office: Array<{ office: string; avg_priority: number }>
   avg_priority_by_city: Array<{ city: string; avg_priority: number }>
-  workload_by_manager: Array<{ manager: string; office: string; current_load: number; assigned_count: number }>
+  workload_by_manager: Array<{
+    manager_id: number
+    manager: string
+    manager_name: string
+    office: string
+    current_load: number
+    assigned_ticket_count: number
+    assigned_count: number
+  }>
 }
 
 export type AssistantQueryRequest = {
@@ -109,6 +119,7 @@ export type AssistantQueryRequest = {
 
 export type AssistantFilters = {
   office_names: string[]
+  office_ids?: number[]
   cities: string[]
   date_from?: string | null
   date_to?: string | null

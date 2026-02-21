@@ -8,6 +8,7 @@ import type {
 export const getAnalyticsSummary = async (query?: {
   run_id?: string
   office?: string
+  office_id?: number
   date_from?: string
   date_to?: string
 }) =>

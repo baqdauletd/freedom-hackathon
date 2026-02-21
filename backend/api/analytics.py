@@ -15,9 +15,17 @@ router = APIRouter(prefix="/analytics", tags=["analytics"])
 def analytics_summary(
     run_id: str | None = None,
     office: str | None = None,
+    office_id: int | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     db: Session = Depends(get_db),
 ) -> dict:
     service = AnalyticsService(get_settings())
-    return service.get_summary(db, run_id=run_id, office=office, date_from=date_from, date_to=date_to)
+    return service.get_summary(
+        db,
+        run_id=run_id,
+        office=office,
+        office_id=office_id,
+        date_from=date_from,
+        date_to=date_to,
+    )

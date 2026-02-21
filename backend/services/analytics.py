@@ -198,7 +198,7 @@ class AnalyticsService:
 
     def get_manager_workload(self, db: Session, filters: AssistantFilters) -> dict:
         count_statement = (
-            select(Assignment.manager_id.label("manager_id"), func.count(Assignment.id).label("assigned_count"))
+            select(Assignment.manager_id.label("manager_id"), func.count(Assignment.id).label("assigned_ticket_count"))
             .join(Ticket, Ticket.id == Assignment.ticket_id)
             .join(AIAnalysis, AIAnalysis.ticket_id == Ticket.id)
             .join(BusinessUnit, BusinessUnit.id == Assignment.office_id)
@@ -208,14 +208,15 @@ class AnalyticsService:
 
         statement = (
             select(
+                Manager.id,
                 Manager.full_name,
                 BusinessUnit.office,
                 Manager.current_load,
-                func.coalesce(count_subquery.c.assigned_count, 0),
+                func.coalesce(count_subquery.c.assigned_ticket_count, 0),
             )
             .join(BusinessUnit, BusinessUnit.id == Manager.office_id)
             .outerjoin(count_subquery, count_subquery.c.manager_id == Manager.id)
-            .order_by(desc(Manager.current_load), Manager.full_name)
+            .order_by(desc(func.coalesce(count_subquery.c.assigned_ticket_count, 0)), Manager.full_name)
         )
 
         if filters.office_names:
@@ -224,17 +225,20 @@ class AnalyticsService:
         rows = db.execute(statement).all()
         table = [
             {
+                "manager_id": int(manager_id),
                 "manager": full_name,
+                "manager_name": full_name,
                 "office": office,
                 "current_load": int(current_load or 0),
-                "assigned_count": int(assigned_count or 0),
+                "assigned_ticket_count": int(assigned_ticket_count or 0),
+                "assigned_count": int(assigned_ticket_count or 0),
             }
-            for full_name, office, current_load, assigned_count in rows
+            for manager_id, full_name, office, current_load, assigned_ticket_count in rows
         ]
 
         return {
             "labels": [row["manager"] for row in table],
-            "values": [row["assigned_count"] for row in table],
+            "values": [row["assigned_ticket_count"] for row in table],
             "table": table,
         }
 
@@ -310,12 +314,14 @@ class AnalyticsService:
         *,
         run_id: str | None = None,
         office: str | None = None,
+        office_id: int | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
     ) -> dict:
         filters = AssistantFilters(
             run_id=run_id,
             office_names=[office] if office else [],
+            office_ids=[office_id] if office_id else [],
             date_from=date_from,
             date_to=date_to,
         )
@@ -379,6 +385,8 @@ class AnalyticsService:
             statement = statement.where(Ticket.run_id == filters.run_id)
         if filters.office_names:
             statement = statement.where(BusinessUnit.office.in_(filters.office_names))
+        if filters.office_ids:
+            statement = statement.where(BusinessUnit.id.in_(filters.office_ids))
         if filters.cities:
             statement = statement.where(Ticket.city.in_(filters.cities))
         if filters.segment:
@@ -526,6 +534,7 @@ def _sanitize_filters(raw: dict[str, Any], known_offices: list[str], known_citie
 
     return AssistantFilters(
         office_names=office_names,
+        office_ids=[],
         cities=cities,
         date_from=date_from,
         date_to=date_to,
