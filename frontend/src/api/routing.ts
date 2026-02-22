@@ -63,13 +63,40 @@ export const uploadAndRoute = async (files: {
 
   if (!response.ok) {
     const contentType = response.headers.get("Content-Type") || ""
+    let body: unknown = null
+    let text = ""
+    const messages: string[] = []
+
     if (contentType.includes("application/json")) {
-      const body = await response.json().catch(() => ({}))
-      const message = typeof body?.detail === "string" ? body.detail : response.statusText
-      throw new ApiError(message || "Upload failed", response.status, { details: body })
+      body = await response.json().catch(() => null)
+      if (body && typeof body === "object") {
+        const detail = (body as { detail?: unknown }).detail
+        if (typeof detail === "string") {
+          messages.push(detail)
+        } else if (Array.isArray(detail)) {
+          detail.forEach((item) => {
+            if (typeof item === "string") {
+              messages.push(item)
+            } else if (item && typeof item === "object") {
+              const msg = (item as { msg?: unknown }).msg
+              if (typeof msg === "string") messages.push(msg)
+            }
+          })
+        }
+        const fallbackMessage = (body as { message?: unknown }).message
+        if (typeof fallbackMessage === "string") messages.push(fallbackMessage)
+      }
+    } else {
+      text = await response.text()
+      if (text.trim()) messages.push(text.trim())
     }
-    const text = await response.text()
-    throw new ApiError(text || "Upload failed", response.status)
+
+    if (!messages.length) {
+      const statusLabel = `${response.status} ${response.statusText}`.trim()
+      messages.push(statusLabel || "Upload failed")
+    }
+
+    throw new ApiError(messages.join("\n"), response.status, { details: body ?? text, messages })
   }
 
   const data = await response.json()

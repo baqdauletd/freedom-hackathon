@@ -59,10 +59,24 @@ const toValidationErrors = (error: unknown): string[] => {
   }
 
   const details = error.body?.details
+  if (Array.isArray(error.body?.messages)) {
+    const messages = error.body?.messages?.filter((item): item is string => typeof item === "string")
+    if (messages?.length) return messages
+  }
   if (details && typeof details === "object" && "detail" in (details as Record<string, unknown>)) {
     const detail = (details as Record<string, unknown>).detail
     if (typeof detail === "string") return [detail]
-    if (Array.isArray(detail)) return detail.filter((item): item is string => typeof item === "string")
+    if (Array.isArray(detail)) {
+      const messages: string[] = []
+      detail.forEach((item) => {
+        if (typeof item === "string") messages.push(item)
+        if (item && typeof item === "object") {
+          const msg = (item as Record<string, unknown>).msg
+          if (typeof msg === "string") messages.push(msg)
+        }
+      })
+      if (messages.length) return messages
+    }
   }
 
   if (typeof error.body?.message === "string") return [error.body.message]

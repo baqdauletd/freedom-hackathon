@@ -38,7 +38,7 @@ httpx==0.28.1
 idna==3.10
 inflection==0.5.1
 iniconfig==2.1.0
-ipython==9.2.0
+ipython==8.2.0
 ipython_pygments_lexers==1.1.1
 jedi==0.19.2
 jiter==0.13.0
