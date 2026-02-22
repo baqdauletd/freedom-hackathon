@@ -4,6 +4,7 @@ export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 export type ApiErrorBody = {
   message?: string;
+  messages?: string[];
   code?: string;
   details?: unknown;
 };
