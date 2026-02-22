@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 
 pytest.importorskip("sqlalchemy")
@@ -8,9 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from backend.db.models import AIAnalysis, Assignment, Base, BusinessUnit, Manager, Ticket
-from backend.schemas.ai import AssistantFilters
-from backend.services.analytics import AnalyticsService
+from backend.db.models import AIAnalysis, Assignment, Base, BusinessUnit, Manager, ProcessingRun, Ticket
 
 
 class DummySettings:
@@ -19,7 +19,7 @@ class DummySettings:
     openai_timeout_seconds = 5.0
 
 
-def _session() -> Session:
+def build_session() -> Session:
     engine = create_engine(
         "sqlite+pysqlite://",
         future=True,
@@ -27,11 +27,16 @@ def _session() -> Session:
         poolclass=StaticPool,
     )
     Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
-    return SessionLocal()
+    session_local = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    return session_local()
 
 
-def _seed(session: Session) -> None:
+def seed_assistant_dataset(session: Session) -> dict[str, str]:
+    run_1 = ProcessingRun(id="11111111-1111-4111-8111-111111111111", status="completed")
+    run_2 = ProcessingRun(id="22222222-2222-4222-8222-222222222222", status="completed")
+    session.add_all([run_1, run_2])
+    session.flush()
+
     astana = BusinessUnit(office="Астана", address="addr", latitude=51.1, longitude=71.4)
     almaty = BusinessUnit(office="Алматы", address="addr2", latitude=43.2, longitude=76.8)
     session.add_all([astana, almaty])
@@ -55,9 +60,10 @@ def _seed(session: Session) -> None:
     session.flush()
 
     ticket_1 = Ticket(
-        external_id="TK-1",
+        run_id=run_1.id,
+        external_id="TK-R1-1",
         segment="VIP",
-        description="Fraud complaint",
+        description="Fraud complaint in Astana",
         country="Казахстан",
         region="",
         city="Астана",
@@ -66,9 +72,10 @@ def _seed(session: Session) -> None:
         birth_date="1990-01-01",
     )
     ticket_2 = Ticket(
-        external_id="TK-2",
+        run_id=run_2.id,
+        external_id="TK-R2-1",
         segment="Mass",
-        description="Consultation",
+        description="Consultation in Almaty",
         country="Казахстан",
         region="",
         city="Алматы",
@@ -76,7 +83,19 @@ def _seed(session: Session) -> None:
         house="2",
         birth_date="2000-01-01",
     )
-    session.add_all([ticket_1, ticket_2])
+    ticket_3 = Ticket(
+        run_id=run_1.id,
+        external_id="TK-R1-2",
+        segment="Mass",
+        description="Unassigned case",
+        country="Казахстан",
+        region="",
+        city="Астана",
+        street="Z",
+        house="3",
+        birth_date="1988-03-03",
+    )
+    session.add_all([ticket_1, ticket_2, ticket_3])
     session.flush()
 
     session.add_all(
@@ -103,7 +122,19 @@ def _seed(session: Session) -> None:
                 recommendation="Action 2",
                 ticket_lat=43.2,
                 ticket_lon=76.8,
-                processing_ms=1000,
+                processing_ms=1200,
+            ),
+            AIAnalysis(
+                ticket_id=ticket_3.id,
+                ticket_type="Смена данных",
+                tone="Нейтральный",
+                priority=5,
+                language="RU",
+                summary="Summary 3",
+                recommendation="Action 3",
+                ticket_lat=51.2,
+                ticket_lon=71.3,
+                processing_ms=4600,
             ),
         ]
     )
@@ -117,6 +148,8 @@ def _seed(session: Session) -> None:
                 manager_id=manager_a.id,
                 selected_pair_snapshot=["Manager A", "Manager B"],
                 rr_turn=0,
+                assignment_status="assigned",
+                assigned_at=datetime(2026, 2, 20, 10, 0, 0),
                 decision_trace={"geo": {"strategy": "nearest_geo"}},
             ),
             Assignment(
@@ -125,57 +158,23 @@ def _seed(session: Session) -> None:
                 manager_id=manager_b.id,
                 selected_pair_snapshot=["Manager B", "Manager A"],
                 rr_turn=1,
-                decision_trace={"geo": {"strategy": "fallback_split"}},
+                assignment_status="assigned",
+                assigned_at=datetime(2026, 2, 21, 10, 0, 0),
+                decision_trace={"geo": {"strategy": "nearest_geo"}},
+            ),
+            Assignment(
+                ticket_id=ticket_3.id,
+                office_id=astana.id,
+                manager_id=None,
+                selected_pair_snapshot=[],
+                rr_turn=0,
+                assignment_status="unassigned",
+                unassigned_reason="no_eligible_managers",
+                assigned_at=datetime(2026, 2, 21, 12, 0, 0),
+                decision_trace={"warnings": ["No eligible manager"]},
             ),
         ]
     )
     session.commit()
 
-
-def test_average_age_by_office_returns_chart_ready_data() -> None:
-    session = _session()
-    try:
-        _seed(session)
-        service = AnalyticsService(DummySettings())
-
-        result = service.get_average_age_by_office(session, AssistantFilters(office_names=["Астана", "Алматы"]))
-
-        assert result["labels"] == ["Астана", "Алматы"]
-        assert len(result["values"]) == 2
-        assert all(isinstance(value, float) for value in result["values"])
-        assert result["table"][0]["office"] == "Астана"
-    finally:
-        session.close()
-
-
-def test_ticket_distribution_by_city_respects_language_filter() -> None:
-    session = _session()
-    try:
-        _seed(session)
-        service = AnalyticsService(DummySettings())
-
-        result = service.get_ticket_distribution_by_city(session, AssistantFilters(language="ENG"))
-
-        assert result["labels"] == ["Алматы"]
-        assert result["values"] == [1]
-        assert result["table"] == [{"city": "Алматы", "count": 1}]
-    finally:
-        session.close()
-
-
-def test_assistant_query_maps_to_allowed_intent_and_shape() -> None:
-    session = _session()
-    try:
-        _seed(session)
-        service = AnalyticsService(DummySettings())
-
-        response = service.assistant_query(session, "показать средний возраст клиентов по офисам Астаны и Алматы")
-
-        assert response["intent"] == "average_age_by_office"
-        assert response["chart_type"] == "bar"
-        assert "title" in response
-        assert "data" in response and set(response["data"].keys()) == {"labels", "values"}
-        assert isinstance(response["table"], list)
-        assert "explanation" in response
-    finally:
-        session.close()
+    return {"run_1": run_1.id, "run_2": run_2.id}

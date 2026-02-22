@@ -158,15 +158,47 @@ export type AssistantFilters = {
   run_id?: string | null
 }
 
-export type AssistantQueryResponse = {
+export type AssistantScopeApplied = {
+  run_id?: string | null
+  office?: string | null
+  date_from?: string | null
+  date_to?: string | null
+}
+
+export type AssistantClarificationOption = {
+  intent: string
+  label: string
+  query_hint: string
+}
+
+export type AssistantResultResponse = {
+  kind: "result"
   intent: string
   title: string
-  chart_type: "bar" | "line" | "pie" | "table"
+  chart_type: "bar" | "line" | "pie" | "donut" | "table" | "empty"
   data: {
     labels: string[]
     values: number[]
+    [key: string]: unknown
   }
   table: Array<Record<string, unknown>>
   explanation: string
   filters: AssistantFilters
+  computed_from?: string | null
+  scope_applied?: AssistantScopeApplied
+  warnings?: string[]
+  used_fallback?: boolean
+  cache_hit?: boolean
 }
+
+export type AssistantClarificationResponse = {
+  kind: "clarification"
+  title: string
+  explanation: string
+  options: AssistantClarificationOption[]
+  filters: AssistantFilters
+  scope_applied?: AssistantScopeApplied
+  warnings?: string[]
+}
+
+export type AssistantResponse = AssistantResultResponse | AssistantClarificationResponse

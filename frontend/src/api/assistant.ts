@@ -1,2 +1,2 @@
 export { askAssistant } from "./analytics-api"
-export type { AssistantQueryRequest as AssistantRequest, AssistantQueryResponse as AssistantResponse } from "./contracts"
+export type { AssistantQueryRequest as AssistantRequest, AssistantResponse } from "./contracts"
