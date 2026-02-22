@@ -63,6 +63,22 @@ frontend/.env
 *.local.env
 secrets.*
 *.secrets
+.npmrc
+.pypirc
+.python-version
+.tool-versions
+.aws/
+.azure/
+.gcp/
+.kube/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+terraform.tfvars
+terraform.tfvars.json
+*.sops.yaml
+*.agekey
 !.env.example
 !backend/.env.example
 !frontend/.env.example
@@ -74,10 +90,19 @@ secrets.*
 *.cer
 *.p12
 *.pfx
+*.jks
+*.keystore
+*.kubeconfig
+*.ovpn
+*.mobileprovision
 id_rsa
 id_rsa.pub
 id_ed25519
 id_ed25519.pub
+id_ecdsa
+id_ecdsa.pub
+id_dsa
+id_dsa.pub
 
 # =========================
 # Logs / runtime artifacts
@@ -96,3 +121,9 @@ temp/
 *.db
 *.bak
 *.dump
+*.sql
+*.sql.gz
+*.sql.zip
+*.rdb
+celerybeat-schedule
+*.pid

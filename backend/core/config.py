@@ -59,6 +59,11 @@ class Settings:
     worker_max_attempts: int = _get_int("WORKER_MAX_ATTEMPTS", 3)
     worker_retry_base_seconds: int = _get_int("WORKER_RETRY_BASE_SECONDS", 2)
     worker_retry_max_seconds: int = _get_int("WORKER_RETRY_MAX_SECONDS", 60)
+    use_celery: bool = _get_bool("USE_CELERY", False)
+    celery_broker_url: str = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
+    celery_result_backend: str = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
+    celery_task_time_limit_seconds: int = _get_int("CELERY_TASK_TIME_LIMIT_SECONDS", 300)
+    celery_task_soft_time_limit_seconds: int = _get_int("CELERY_TASK_SOFT_TIME_LIMIT_SECONDS", 240)
 
     tickets_csv_path: str = os.getenv("TICKETS_CSV", "tickets.csv")
     managers_csv_path: str = os.getenv("MANAGERS_CSV", "managers.csv")

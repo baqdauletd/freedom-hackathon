@@ -49,7 +49,7 @@ class GeocodingService:
         ]
         return ", ".join(part for part in parts if part)
 
-    def geocode(self, address: str) -> Optional[tuple[float, float]]:
+    def geocode(self, address: str, *, raise_on_error: bool = False) -> Optional[tuple[float, float]]:
         address = address.strip()
         if not address:
             return None
@@ -86,6 +86,8 @@ class GeocodingService:
                 "geocode_failed",
                 extra={"error": str(exc), "duration_ms": round((time.perf_counter() - started) * 1000, 2)},
             )
+            if raise_on_error:
+                raise
             self.cache[address] = None
             self.failure_streak += 1
 

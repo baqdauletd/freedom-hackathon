@@ -112,8 +112,9 @@ Primary vars (see `backend/.env.example` for full list):
 - `GEOCODE_TIMEOUT_SECONDS`, `GEOCODE_RATE_LIMIT_SECONDS`, `GEOCODE_FAIL_STREAK_LIMIT`
 - `PER_TICKET_BUDGET_MS`
 - `WORKER_POLL_INTERVAL_SECONDS`, `WORKER_MAX_ATTEMPTS`, `WORKER_RETRY_BASE_SECONDS`, `WORKER_RETRY_MAX_SECONDS`
+- `USE_CELERY`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`
 
-## Docker (API + Worker + DB)
+## Docker (API + DB + Redis + Workers)
 
 1. Create env file:
 
@@ -121,7 +122,7 @@ Primary vars (see `backend/.env.example` for full list):
 cp backend/.env.example backend/.env
 ```
 
-2. Start everything (Postgres + migration + API + worker):
+2. Start everything (Postgres + migration + API + Redis + workers):
 
 ```bash
 docker compose up --build -d
@@ -131,7 +132,14 @@ docker compose up --build -d
 
 ```bash
 docker compose ps
-docker compose logs -f api worker
+docker compose logs -f api worker worker-default worker-ai worker-geocode worker-routing
+```
+
+Optional Flower UI:
+
+```bash
+docker compose --profile observability up -d flower
+# http://localhost:5555
 ```
 
 4. Stop:
@@ -209,15 +217,20 @@ Security model:
 Queue model:
 
 - Upload async endpoint validates CSVs and enqueues a DB job (`processing_jobs`) linked to `processing_runs`.
-- Worker claims jobs with `FOR UPDATE SKIP LOCKED`, processes them, and updates run/job status.
-- Retry policy uses exponential backoff (`WORKER_RETRY_BASE_SECONDS`, `WORKER_RETRY_MAX_SECONDS`) up to `WORKER_MAX_ATTEMPTS`.
+- **DB is source of truth** for status/progress (`/jobs/{id}` reads only DB).
+- `USE_CELERY=true`: API dispatches `process_run` Celery task; pipeline fan-out uses queues: `default`, `ai`, `geocode`, `routing`.
+- `USE_CELERY=false`: legacy DB polling worker continues to work (`python -m backend.worker`).
+- Retry policy:
+  - AI/geocode transient failures retry with backoff+jitter.
+  - Assignment retries only for deadlock/serialization DB errors (max 1-2 retries).
+  - Deterministic validation failures are marked failed without retry.
 
 Idempotency:
 
 - Send `Idempotency-Key` header on async enqueue endpoints.
 - If the key already exists, API returns the previously created job/run instead of creating duplicates.
 
-Run worker:
+Run legacy worker (non-Celery mode):
 
 ```bash
 python -m backend.worker
@@ -227,6 +240,17 @@ One-shot processing (useful in local dev/CI):
 
 ```bash
 python -m backend.worker --once
+
+Run Celery workers (Celery mode):
+
+```bash
+export USE_CELERY=true
+# or set USE_CELERY=true in backend/.env for API container/local API process
+celery -A backend.celery_app.celery_app worker -Q default --loglevel=INFO
+celery -A backend.celery_app.celery_app worker -Q ai --loglevel=INFO
+celery -A backend.celery_app.celery_app worker -Q geocode --loglevel=INFO
+celery -A backend.celery_app.celery_app worker -Q routing --loglevel=INFO
+```
 ```
 
 Async enqueue example:

@@ -40,6 +40,7 @@ def choose_office(
     ticket_index: int,
     compliance_mode: bool,
     enable_geocode: bool,
+    geocode_raise_on_error: bool = False,
 ) -> OfficeDecision:
     country = (ticket.get("Страна") or "").strip()
     if geocoder.is_foreign(country) or not geocoder.has_enough_address(ticket):
@@ -69,7 +70,7 @@ def choose_office(
             )
 
     ticket_address = geocoder.build_address(ticket)
-    ticket_coords = geocoder.geocode(ticket_address)
+    ticket_coords = geocoder.geocode(ticket_address, raise_on_error=geocode_raise_on_error)
     if not ticket_coords:
         office_name = split_astana_almaty(ticket_index)
         office = next((o for o in offices if o["office"] == office_name), None)

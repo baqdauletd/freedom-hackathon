@@ -73,6 +73,33 @@ class ProcessingJob(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     run: Mapped[ProcessingRun] = relationship(back_populates="job")
+    ticket_states: Mapped[list["ProcessingJobTicket"]] = relationship(back_populates="job")
+
+
+class ProcessingJobTicket(Base):
+    __tablename__ = "processing_job_tickets"
+    __table_args__ = (UniqueConstraint("job_id", "ticket_id", name="uq_job_ticket_stage"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("processing_jobs.id", ondelete="CASCADE"), index=True)
+    ticket_id: Mapped[int] = mapped_column(ForeignKey("tickets.id", ondelete="CASCADE"), index=True)
+    external_ticket_id: Mapped[str] = mapped_column(String(255), index=True)
+    stage: Mapped[str] = mapped_column(String(32), default="queued", index=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    retries: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+        index=True,
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    job: Mapped[ProcessingJob] = relationship(back_populates="ticket_states")
+    ticket: Mapped["Ticket"] = relationship()
 
 
 class Ticket(Base):

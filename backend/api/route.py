@@ -29,7 +29,7 @@ from backend.services.ingestion import (
     validate_tickets,
 )
 from backend.services.processing import process_tickets
-from backend.services.queue import enqueue_processing_job
+from backend.services.queue import enqueue_run
 
 router = APIRouter(tags=["routing"])
 LOGGER = logging.getLogger("fire.ingestion")
@@ -193,7 +193,7 @@ async def route_upload_async(
     except CSVValidationError as exc:
         raise _bad_request(exc) from exc
 
-    enqueue = enqueue_processing_job(
+    enqueue = enqueue_run(
         db,
         get_settings(),
         tickets=tickets_rows,
@@ -274,7 +274,7 @@ async def process_ticket_batch_async(
     except CSVValidationError as exc:
         raise _bad_request(exc) from exc
 
-    enqueue = enqueue_processing_job(
+    enqueue = enqueue_run(
         db,
         get_settings(),
         tickets=tickets_rows,

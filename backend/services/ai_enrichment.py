@@ -53,7 +53,7 @@ class AIEnrichmentService:
         if self.settings.openai_api_key and OpenAIClient is not None:
             self.client = OpenAIClient(api_key=self.settings.openai_api_key, timeout=self.settings.openai_timeout_seconds)
 
-    def analyze(self, ticket: dict[str, str]) -> AIResult:
+    def analyze(self, ticket: dict[str, str], *, raise_on_error: bool = False) -> AIResult:
         text = (ticket.get("Описание") or "").strip()
         started = time.perf_counter()
         if not self.client:
@@ -101,6 +101,8 @@ class AIEnrichmentService:
                 "openai_analysis_failed",
                 extra={"error": str(exc), "duration_ms": round((time.perf_counter() - started) * 1000, 2)},
             )
+            if raise_on_error:
+                raise
             return self._fallback(text)
 
     def _normalize(self, data: dict, source_text: str) -> AIResult:

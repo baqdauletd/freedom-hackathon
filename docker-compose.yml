@@ -1,4 +1,15 @@
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: fire-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   postgres:
     image: postgres:16
     container_name: fire-postgres
@@ -45,11 +56,15 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/fire
       AUTO_CREATE_SCHEMA: "false"
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
     depends_on:
       postgres:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     ports:
       - "8000:8000"
     restart: unless-stopped
@@ -66,12 +81,120 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/fire
       AUTO_CREATE_SCHEMA: "false"
+      USE_CELERY: "false"
     depends_on:
       postgres:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
     restart: unless-stopped
+
+  worker-default:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: fire-worker-default
+    working_dir: /app
+    command: ["celery", "-A", "backend.celery_app.celery_app", "worker", "-Q", "default", "--concurrency=2", "--loglevel=INFO"]
+    env_file:
+      - backend/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/fire
+      AUTO_CREATE_SCHEMA: "false"
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      USE_CELERY: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker-ai:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: fire-worker-ai
+    working_dir: /app
+    command: ["celery", "-A", "backend.celery_app.celery_app", "worker", "-Q", "ai", "--concurrency=2", "--loglevel=INFO"]
+    env_file:
+      - backend/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/fire
+      AUTO_CREATE_SCHEMA: "false"
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      USE_CELERY: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker-geocode:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: fire-worker-geocode
+    working_dir: /app
+    command: ["celery", "-A", "backend.celery_app.celery_app", "worker", "-Q", "geocode", "--concurrency=2", "--loglevel=INFO"]
+    env_file:
+      - backend/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/fire
+      AUTO_CREATE_SCHEMA: "false"
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      USE_CELERY: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker-routing:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: fire-worker-routing
+    working_dir: /app
+    command: ["celery", "-A", "backend.celery_app.celery_app", "worker", "-Q", "routing", "--concurrency=2", "--loglevel=INFO"]
+    env_file:
+      - backend/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/fire
+      AUTO_CREATE_SCHEMA: "false"
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      USE_CELERY: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  flower:
+    image: mher/flower:2.0
+    container_name: fire-flower
+    command: ["celery", "--broker=redis://redis:6379/0", "flower", "--port=5555"]
+    ports:
+      - "5555:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+    profiles: ["observability"]
 
 volumes:
   fire_pg_data:
