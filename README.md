@@ -185,32 +185,15 @@ curl -X POST http://localhost:8000/assistant/query \
 
 ## Assistant (Star Task)
 
-Supported assistant intents:
+Assistant now supports:
 
-- `average_age_by_office`
-- `ticket_count_by_city`
-- `ticket_type_distribution`
-- `sentiment_distribution`
-- `avg_priority_by_office`
-- `workload_by_manager`
-- `custom_filtered_summary`
+- Result and clarification responses (`kind: "result" | "clarification"`).
+- Expanded hard-mapped analytics intents (distribution, VIP breakdown, unassigned, processing-time, trend).
+- Scope intersection enforcement (`run_id`, `office`, `date_from`, `date_to`) to prevent prompt-based scope expansion.
+- Deterministic fallback mode with chart-ready response schema.
+- Provenance metadata (`computed_from`, `scope_applied`, `warnings`, `used_fallback`, `cache_hit`).
 
-Example queries:
-
-- `показать средний возраст клиентов, чьи обращения попали в офисы Астаны и Алматы`
-- `распределение тональности обращений за 2026-02-01 2026-02-21`
-- `нагрузка по менеджерам в офисе Астана`
-- `count tickets by city for VIP segment`
-
-Response shape:
-
-- `intent`: resolved allowlisted intent
-- `title`: chart title
-- `chart_type`: `bar | line | pie | table`
-- `data`: `{ labels: string[], values: number[] }`
-- `table`: tabular rows for UI
-- `explanation`: business-readable explanation
-- `filters`: sanitized filters extracted from NL query
+See full Star Task details and sample payloads in `docs/star-task.md`.
 
 Security model:
 

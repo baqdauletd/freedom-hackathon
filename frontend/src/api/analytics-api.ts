@@ -2,7 +2,7 @@ import { apiClient } from "./client"
 import type {
   AnalyticsSummaryResponse,
   AssistantQueryRequest,
-  AssistantQueryResponse,
+  AssistantResponse,
 } from "./contracts"
 
 export const getAnalyticsSummary = async (query?: {
@@ -19,7 +19,7 @@ export const getAnalyticsSummary = async (query?: {
   })
 
 export const askAssistant = async (payload: AssistantQueryRequest) =>
-  apiClient.request<AssistantQueryResponse, AssistantQueryRequest>({
+  apiClient.request<AssistantResponse, AssistantQueryRequest>({
     method: "POST",
     path: "/assistant/query",
     body: payload,

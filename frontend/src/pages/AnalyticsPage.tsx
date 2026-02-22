@@ -1,15 +1,20 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { askAssistant, getAnalyticsSummary } from "../api/analytics-api"
-import type { AssistantQueryResponse, ManagerListItem } from "../api/contracts"
-import { getManagers } from "../api/routing"
+import type {
+  AssistantClarificationResponse,
+  AssistantResponse,
+  AssistantResultResponse,
+} from "../api/contracts"
 import { useAppState } from "../state/AppStateContext"
 
 type SimpleDatum = { label: string; value: number }
-type WorkloadRow = {
-  manager_id?: number
-  manager_name: string
-  current_load: number
-  assigned_ticket_count: number
+
+type AssistantTurn = {
+  id: string
+  query: string
+  status: "loading" | "done" | "error"
+  response?: AssistantResponse
+  error?: string
 }
 
 const COLORS = ["#2f6cfb", "#ff6b4a", "#21b573", "#f8c75b", "#7b8bbd", "#151a2d"]
@@ -32,53 +37,12 @@ const buildPie = (data: SimpleDatum[]) => {
   return `conic-gradient(${segments.join(", ")})`
 }
 
-const normalizeAssistantSeries = (response: AssistantQueryResponse): SimpleDatum[] => {
+const normalizeAssistantSeries = (response: AssistantResultResponse): SimpleDatum[] => {
   if (!response?.data?.labels?.length || !response?.data?.values?.length) return []
   return response.data.labels.map((label, index) => ({
     label,
     value: Number(response.data.values[index] ?? 0),
   }))
-}
-
-const sanitizeManagerName = (value: unknown): string => {
-  const normalized = String(value ?? "").trim()
-  if (!normalized) return "Unassigned"
-  const lowered = normalized.toLowerCase()
-  if (lowered === "undefined" || lowered === "null" || lowered === "nan") return "Unassigned"
-  return normalized
-}
-
-const normalizeWorkloadRow = (row: Record<string, unknown>): WorkloadRow => {
-  const managerIdRaw = row.manager_id
-  const managerId =
-    typeof managerIdRaw === "number"
-      ? managerIdRaw
-      : typeof managerIdRaw === "string" && managerIdRaw.trim() !== ""
-        ? Number(managerIdRaw)
-        : undefined
-
-  const assignedRaw = row.assigned_ticket_count ?? row.assigned_count ?? row.count ?? 0
-  const assigned =
-    typeof assignedRaw === "number"
-      ? assignedRaw
-      : typeof assignedRaw === "string" && assignedRaw.trim() !== ""
-        ? Number(assignedRaw)
-        : 0
-
-  const currentLoadRaw = row.current_load ?? 0
-  const currentLoad =
-    typeof currentLoadRaw === "number"
-      ? currentLoadRaw
-      : typeof currentLoadRaw === "string" && currentLoadRaw.trim() !== ""
-        ? Number(currentLoadRaw)
-        : 0
-
-  return {
-    manager_id: Number.isFinite(managerId) ? managerId : undefined,
-    manager_name: sanitizeManagerName(row.manager_name ?? row.manager),
-    current_load: Number.isFinite(currentLoad) ? currentLoad : 0,
-    assigned_ticket_count: Number.isFinite(assigned) ? assigned : 0,
-  }
 }
 
 function ChartCard({
@@ -165,6 +129,116 @@ function AssistantTable({ rows }: { rows: Array<Record<string, unknown>> }) {
   )
 }
 
+function AppliedFilters({ result }: { result: AssistantResultResponse }) {
+  const chips: string[] = []
+  result.filters.office_names.forEach((officeName) => chips.push(`office: ${officeName}`))
+  result.filters.cities.forEach((city) => chips.push(`city: ${city}`))
+  if (result.filters.segment) chips.push(`segment: ${result.filters.segment}`)
+  if (result.filters.language) chips.push(`language: ${result.filters.language}`)
+  if (result.filters.ticket_type) chips.push(`type: ${result.filters.ticket_type}`)
+  if (result.filters.date_from) chips.push(`from: ${result.filters.date_from}`)
+  if (result.filters.date_to) chips.push(`to: ${result.filters.date_to}`)
+
+  if (!chips.length) return <p className="muted">Applied filters: none</p>
+
+  return (
+    <div className="chips-wrap">
+      {chips.map((chip) => (
+        <span key={chip} className="chip">
+          {chip}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function ClarificationOptions({
+  response,
+  onPick,
+}: {
+  response: AssistantClarificationResponse
+  onPick: (query: string) => void
+}) {
+  return (
+    <div className="clarification-options">
+      <p className="muted">{response.explanation}</p>
+      <div className="panel-actions">
+        {response.options.map((option) => (
+          <button key={`${option.intent}-${option.label}`} className="ghost" onClick={() => onPick(option.query_hint)}>
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function AssistantResultCard({
+  response,
+  onApplyFilters,
+  onPin,
+}: {
+  response: AssistantResultResponse
+  onApplyFilters: (result: AssistantResultResponse) => void
+  onPin: (result: AssistantResultResponse) => void
+}) {
+  const series = normalizeAssistantSeries(response)
+  const mode =
+    response.chart_type === "pie" || response.chart_type === "donut"
+      ? "pie"
+      : response.chart_type === "line"
+        ? "line"
+        : "bar"
+
+  return (
+    <div className="assistant-result">
+      <div className="panel-header">
+        <div>
+          <p className="muted">Intent: {response.intent}</p>
+          <h4>{response.title}</h4>
+        </div>
+        <div className="panel-actions">
+          {response.used_fallback ? <span className="badge badge-offline">Using offline mode</span> : null}
+          {response.cache_hit ? <span className="badge">Cached</span> : null}
+        </div>
+      </div>
+
+      <p>{response.explanation}</p>
+
+      {response.chart_type === "empty" ? (
+        <p className="muted">No data in selected scope.</p>
+      ) : (
+        <ChartCard
+          title="Assistant chart"
+          description={`Suggested ${response.chart_type} visualization`}
+          data={series}
+          mode={mode}
+        />
+      )}
+
+      <AssistantTable rows={response.table} />
+      <AppliedFilters result={response} />
+
+      {response.warnings?.length ? (
+        <ul className="mini-list">
+          {response.warnings.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+        </ul>
+      ) : null}
+
+      <div className="panel-actions">
+        <button className="ghost" onClick={() => onApplyFilters(response)}>
+          Apply filters to scope
+        </button>
+        <button className="ghost" onClick={() => onPin(response)}>
+          Pin to dashboard
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function AnalyticsPage() {
   const { latestRun, pinnedCharts, pinChart, clearPinnedCharts } = useAppState()
   const runId = latestRun?.run_id || ""
@@ -175,16 +249,12 @@ function AnalyticsPage() {
     ticket_types_by_city: Array<{ city: string; ticket_type: string; count: number }>
     sentiment_distribution: Array<{ tone: string; count: number }>
     avg_priority_by_office: Array<{ office: string; avg_priority: number }>
-    workload_by_manager: WorkloadRow[]
   } | null>(null)
-  const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
 
-  const [assistantQuery, setAssistantQuery] = useState("")
-  const [assistantLoading, setAssistantLoading] = useState(false)
-  const [assistantError, setAssistantError] = useState("")
-  const [assistantResult, setAssistantResult] = useState<AssistantQueryResponse | null>(null)
-  const [showAdvancedTools, setShowAdvancedTools] = useState(false)
+  const [assistantInput, setAssistantInput] = useState("")
+  const [assistantTurns, setAssistantTurns] = useState<AssistantTurn[]>([])
+  const assistantTurnCounter = useRef(0)
 
   const hasActiveFilters = Boolean(office || dateFrom || dateTo)
 
@@ -195,67 +265,35 @@ function AnalyticsPage() {
   }
 
   useEffect(() => {
-    if (!runId) {
-      setSummary(null)
-      setLoading(false)
-      setError("")
-      return
-    }
+    if (!runId) return
 
     let alive = true
-    setLoading(true)
-    setError("")
 
-    Promise.all([
-      getAnalyticsSummary({
-        run_id: runId,
-        office: office || undefined,
-        date_from: dateFrom || undefined,
-        date_to: dateTo || undefined,
-      }),
-      getManagers({
-        run_id: runId,
-        office: office || undefined,
-        date_from: dateFrom || undefined,
-        date_to: dateTo || undefined,
-      }),
-    ])
-      .then(([analyticsPayload, managersPayload]) => {
+    getAnalyticsSummary({
+      run_id: runId,
+      office: office || undefined,
+      date_from: dateFrom || undefined,
+      date_to: dateTo || undefined,
+    })
+      .then((analyticsPayload) => {
         if (!alive) return
-        const managerItems: WorkloadRow[] = ((managersPayload as { items?: ManagerListItem[] }).items || []).map(
-          (manager) => ({
-            manager_id: manager.id,
-            manager_name: sanitizeManagerName(manager.full_name),
-            current_load: manager.current_load,
-            assigned_ticket_count: manager.assigned_count,
-          }),
-        )
-
         const analytics = analyticsPayload as {
           ticket_types_by_city: Array<{ city: string; ticket_type: string; count: number }>
           sentiment_distribution: Array<{ tone: string; count: number }>
           avg_priority_by_office: Array<{ office: string; avg_priority: number }>
-          workload_by_manager?: Array<Record<string, unknown>>
         }
-
-        const analyticsWorkload = Array.isArray(analytics.workload_by_manager)
-          ? analytics.workload_by_manager.map(normalizeWorkloadRow)
-          : []
 
         setSummary({
           ticket_types_by_city: analytics.ticket_types_by_city || [],
           sentiment_distribution: analytics.sentiment_distribution || [],
           avg_priority_by_office: analytics.avg_priority_by_office || [],
-          workload_by_manager: analyticsWorkload.length ? analyticsWorkload : managerItems,
         })
+        setError("")
       })
       .catch((requestError: unknown) => {
         if (!alive) return
+        setSummary(null)
         setError(requestError instanceof Error ? requestError.message : "Failed to load analytics.")
-      })
-      .finally(() => {
-        if (!alive) return
-        setLoading(false)
       })
 
     return () => {
@@ -264,7 +302,8 @@ function AnalyticsPage() {
   }, [runId, dateFrom, dateTo, office])
 
   const chartData = useMemo(() => {
-    if (!summary) return null
+    if (!runId || !summary) return null
+
     const typeByCity = summary.ticket_types_by_city.reduce<Record<string, number>>((acc, row) => {
       const key = `${row.city} · ${row.ticket_type}`
       acc[key] = (acc[key] || 0) + row.count
@@ -276,44 +315,64 @@ function AnalyticsPage() {
         .map(([label, value]) => ({ label, value }))
         .sort((a, b) => b.value - a.value)
         .slice(0, 12),
+      sentiment: toSeries(summary.sentiment_distribution, "tone", "count"),
       avgPriority: toSeries(summary.avg_priority_by_office, "office", "avg_priority"),
-      workload: summary.workload_by_manager
-        .map((row) => ({
-          label: `${row.manager_name}${typeof row.manager_id === "number" ? ` (#${row.manager_id})` : ""}`,
-          value: Number(row.assigned_ticket_count || 0),
-        }))
-        .filter((row) => row.value > 0)
-        .sort((a, b) => b.value - a.value),
     }
-  }, [summary])
+  }, [runId, summary])
 
-  const submitAssistant = async () => {
-    if (!assistantQuery.trim()) return
-    setAssistantLoading(true)
-    setAssistantError("")
+  const suggestions = useMemo(() => {
+    const officeHint = office ? ` for office ${office}` : ""
+    const dateHint = dateFrom || dateTo ? ` from ${dateFrom || "start"} to ${dateTo || "today"}` : ""
+    return [
+      `Tickets by office${dateHint}`,
+      `Sentiment distribution${officeHint}${dateHint}`,
+      `Average priority by office${dateHint}`,
+      `Top managers by assigned tickets${officeHint}${dateHint}`,
+      `VIP vs Mass breakdown${dateHint}`,
+    ]
+  }, [office, dateFrom, dateTo])
+
+  const applyFiltersFromAssistant = (result: AssistantResultResponse) => {
+    setOffice(result.filters.office_names[0] || "")
+    setDateFrom(result.filters.date_from || "")
+    setDateTo(result.filters.date_to || "")
+  }
+
+  const submitAssistant = async (text?: string) => {
+    const query = (text ?? assistantInput).trim()
+    if (!query) return
+
+    assistantTurnCounter.current += 1
+    const turnId = `turn-${assistantTurnCounter.current}`
+    setAssistantInput("")
+    setAssistantTurns((prev) => [...prev, { id: turnId, query, status: "loading" }])
+
     try {
       const response = await askAssistant({
-        query: assistantQuery.trim(),
+        query,
         run_id: runId || undefined,
         office: office || undefined,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
       })
-      setAssistantResult(response)
+
+      setAssistantTurns((prev) =>
+        prev.map((turn) => (turn.id === turnId ? { ...turn, status: "done", response } : turn)),
+      )
     } catch (requestError: unknown) {
-      setAssistantError(requestError instanceof Error ? requestError.message : "Assistant request failed.")
-    } finally {
-      setAssistantLoading(false)
+      const message = requestError instanceof Error ? requestError.message : "Assistant request failed."
+      setAssistantTurns((prev) =>
+        prev.map((turn) =>
+          turn.id === turnId
+            ? {
+                ...turn,
+                status: "error",
+                error: message,
+              }
+            : turn,
+        ),
+      )
     }
-  }
-
-  const applyAssistantFilters = () => {
-    if (!assistantResult) return
-    const filters = assistantResult.filters
-
-    setOffice(filters.office_names[0] || "")
-    setDateFrom(filters.date_from || "")
-    setDateTo(filters.date_to || "")
   }
 
   return (
@@ -322,7 +381,7 @@ function AnalyticsPage() {
         <div className="panel-header">
           <div>
             <h3>Analytics dashboard</h3>
-            <p className="muted">Track workload, sentiment, and assignment quality across offices.</p>
+            <p className="muted">Clean operational metrics for the latest upload.</p>
             <p className="muted">Showing latest upload only.</p>
           </div>
           <button className="ghost" type="button" onClick={clearFilters} disabled={!hasActiveFilters}>
@@ -345,22 +404,21 @@ function AnalyticsPage() {
         </div>
       </header>
 
-      {loading ? <p className="muted">Loading analytics...</p> : null}
-      {error ? <p className="error-text">{error}</p> : null}
+      {runId && error ? <p className="error-text">{error}</p> : null}
       {!runId ? <p className="muted">Upload files first to view analytics for the latest run.</p> : null}
 
       <div className="charts-grid">
-        <ChartCard
-          title="Assigned tickets by manager"
-          description="Number of assignments in the latest upload with selected filters."
-          data={chartData?.workload || []}
-          mode="bar"
-        />
         <ChartCard
           title="Types by city"
           description="Distribution of ticket categories by city."
           data={chartData?.typeByCity || []}
           mode="bar"
+        />
+        <ChartCard
+          title="Sentiment distribution"
+          description="Positive, neutral, and negative share."
+          data={chartData?.sentiment || []}
+          mode="pie"
         />
         <ChartCard
           title="Average priority by office"
@@ -372,107 +430,95 @@ function AnalyticsPage() {
 
       <section className="panel assistant-panel">
         <div className="panel-header">
-          <h3>Advanced tools</h3>
-          <button className="ghost" type="button" onClick={() => setShowAdvancedTools((prev) => !prev)}>
-            {showAdvancedTools ? "Hide" : "Show"}
+          <div>
+            <h3>AI Assistant</h3>
+            <p className="muted">Ask analytics questions in plain language.</p>
+          </div>
+          <button className="ghost" onClick={() => setAssistantTurns([])} disabled={!assistantTurns.length}>
+            Clear chat
           </button>
         </div>
-        {!showAdvancedTools ? <p className="muted">Hidden by default to keep analytics focused.</p> : null}
 
-        {showAdvancedTools ? (
-          <>
-            <p className="muted">Use AI queries and pinned charts when deeper exploration is needed.</p>
-            <div className="assistant-controls">
-              <input
-                value={assistantQuery}
-                onChange={(event) => setAssistantQuery(event.target.value)}
-                placeholder="Показать средний возраст клиентов по офисам Астана и Алматы"
-              />
-              <button className="primary" onClick={submitAssistant} disabled={assistantLoading}>
-                {assistantLoading ? "Running..." : "Ask assistant"}
-              </button>
-            </div>
+        <div className="assistant-suggestions">
+          {suggestions.map((suggestion) => (
+            <button key={suggestion} className="ghost" onClick={() => submitAssistant(suggestion)}>
+              {suggestion}
+            </button>
+          ))}
+        </div>
 
-            {assistantError ? <p className="error-text">{assistantError}</p> : null}
+        <div className="assistant-controls">
+          <input
+            value={assistantInput}
+            onChange={(event) => setAssistantInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault()
+                void submitAssistant()
+              }
+            }}
+            placeholder="Ask: Show unassigned rate and reasons in Astana"
+          />
+          <button className="primary" onClick={() => void submitAssistant()}>
+            Ask assistant
+          </button>
+        </div>
 
-            {assistantResult ? (
-              <div className="assistant-result">
-                <div className="panel-header">
-                  <div>
-                    <p className="muted">Intent: {assistantResult.intent}</p>
-                    <h4>{assistantResult.title}</h4>
-                  </div>
-                  <div className="panel-actions">
-                    <button className="ghost" onClick={() => setAssistantQuery(`${assistantQuery} по офису Астана`)}>
-                      Refine query
-                    </button>
-                    <button className="ghost" onClick={applyAssistantFilters}>
-                      Apply filters
-                    </button>
-                    <button className="ghost" onClick={() => pinChart(assistantResult)}>
-                      Pin to dashboard
-                    </button>
-                  </div>
-                </div>
+        {!assistantTurns.length ? <p className="muted">Start with a suggestion or type your own question.</p> : null}
 
-                <p>{assistantResult.explanation}</p>
+        <div className="assistant-chat">
+          {assistantTurns.map((turn) => (
+            <div key={turn.id} className="assistant-turn">
+              <div className="assistant-user-bubble">{turn.query}</div>
+              <div className="assistant-ai-bubble">
+                {turn.status === "loading" ? (
+                  <p className="muted">Thinking<span className="loading-dots">...</span></p>
+                ) : null}
 
-                <ChartCard
-                  title="Assistant chart"
-                  description={`Suggested ${assistantResult.chart_type} visualization`}
-                  data={normalizeAssistantSeries(assistantResult)}
-                  mode={assistantResult.chart_type === "pie" ? "pie" : assistantResult.chart_type === "line" ? "line" : "bar"}
-                />
+                {turn.status === "error" ? <p className="error-text">{turn.error}</p> : null}
 
-                <AssistantTable rows={assistantResult.table} />
-
-                <div className="chips-wrap">
-                  {assistantResult.filters.office_names.map((name) => (
-                    <span key={`office-${name}`} className="chip">
-                      office: {name}
-                    </span>
-                  ))}
-                  {assistantResult.filters.cities.map((name) => (
-                    <span key={`city-${name}`} className="chip">
-                      city: {name}
-                    </span>
-                  ))}
-                  {assistantResult.filters.segment ? <span className="chip">segment: {assistantResult.filters.segment}</span> : null}
-                  {assistantResult.filters.language ? <span className="chip">lang: {assistantResult.filters.language}</span> : null}
-                  {assistantResult.filters.ticket_type ? (
-                    <span className="chip">type: {assistantResult.filters.ticket_type}</span>
-                  ) : null}
-                  {assistantResult.filters.date_from ? <span className="chip">from: {assistantResult.filters.date_from}</span> : null}
-                  {assistantResult.filters.date_to ? <span className="chip">to: {assistantResult.filters.date_to}</span> : null}
-                </div>
-              </div>
-            ) : (
-              <p className="muted">Ask a query to generate chart + table + explanation.</p>
-            )}
-
-            <div className="panel">
-              <div className="panel-header">
-                <h3>Pinned assistant charts</h3>
-                <button className="ghost" onClick={clearPinnedCharts} disabled={!pinnedCharts.length}>
-                  Clear
-                </button>
-              </div>
-              {!pinnedCharts.length ? <p className="muted">No pinned charts yet.</p> : null}
-              <div className="charts-grid">
-                {pinnedCharts.map((chart, index) => (
-                  <ChartCard
-                    key={`${chart.intent}-${index}`}
-                    title={chart.title}
-                    description={chart.explanation}
-                    data={normalizeAssistantSeries(chart)}
-                    mode={chart.chart_type === "pie" ? "pie" : chart.chart_type === "line" ? "line" : "bar"}
+                {turn.status === "done" && turn.response?.kind === "clarification" ? (
+                  <ClarificationOptions
+                    response={turn.response}
+                    onPick={(queryHint) => {
+                      void submitAssistant(queryHint)
+                    }}
                   />
-                ))}
+                ) : null}
+
+                {turn.status === "done" && turn.response?.kind === "result" ? (
+                  <AssistantResultCard
+                    response={turn.response}
+                    onApplyFilters={applyFiltersFromAssistant}
+                    onPin={pinChart}
+                  />
+                ) : null}
               </div>
             </div>
-          </>
-        ) : null}
+          ))}
+        </div>
       </section>
+
+      <div className="panel">
+        <div className="panel-header">
+          <h3>Pinned assistant charts</h3>
+          <button className="ghost" onClick={clearPinnedCharts} disabled={!pinnedCharts.length}>
+            Clear
+          </button>
+        </div>
+        {!pinnedCharts.length ? <p className="muted">No pinned charts yet.</p> : null}
+        <div className="charts-grid">
+          {pinnedCharts.map((chart, index) => (
+            <ChartCard
+              key={`${chart.intent}-${index}`}
+              title={chart.title}
+              description={chart.explanation}
+              data={normalizeAssistantSeries(chart)}
+              mode={chart.chart_type === "pie" || chart.chart_type === "donut" ? "pie" : chart.chart_type === "line" ? "line" : "bar"}
+            />
+          ))}
+        </div>
+      </div>
     </section>
   )
 }

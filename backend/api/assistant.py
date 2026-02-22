@@ -5,13 +5,13 @@ from sqlalchemy.orm import Session
 
 from backend.core.config import get_settings
 from backend.db.session import get_db
-from backend.schemas.ai import AssistantQueryRequest, AssistantQueryResponse
+from backend.schemas.ai import AssistantQueryRequest, AssistantResponse
 from backend.services.analytics import AnalyticsService
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
 
 
-@router.post("/query", response_model=AssistantQueryResponse)
+@router.post("/query", response_model=AssistantResponse)
 def assistant_query(payload: AssistantQueryRequest, db: Session = Depends(get_db)) -> dict:
     query = (payload.query or payload.prompt or "").strip()
     if not query:
